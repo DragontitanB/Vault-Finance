@@ -263,6 +263,344 @@ namespace VaultFinance.Infrastructure.Persistence.Migrations
                     b.ToTable("AspNetUsers", (string)null);
                 });
 
+            modelBuilder.Entity("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialAccountMovement", b =>
+                {
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("BatchId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<long>("BatchSequence")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasColumnType("varchar(3)");
+
+                    b.Property<DateOnly>("EffectiveDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("RecordedAtUtc")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<decimal>("SignedAmount")
+                        .HasPrecision(28, 2)
+                        .HasColumnType("decimal(28,2)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.ToTable((string)null);
+
+                    b.ToView("FinancialAccountMovements", (string)null);
+                });
+
+            modelBuilder.Entity("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialAuditEntryRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<Guid>("OutcomeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("RecordedAtUtc")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<string>("SummaryJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "OutcomeId")
+                        .IsUnique();
+
+                    b.ToTable("FinancialAuditEntries", null, t =>
+                        {
+                            t.HasTrigger("TR_FinancialAuditEntries_AppendOnly");
+
+                            t.HasCheckConstraint("CK_FinancialAuditEntries_Action", "DATALENGTH([Action]) BETWEEN 1 AND 64 AND [Action] COLLATE Latin1_General_100_BIN2 NOT LIKE '%[^A-Za-z0-9_.-]%'");
+
+                            t.HasCheckConstraint("CK_FinancialAuditEntries_Ids", "[Id] <> '00000000-0000-0000-0000-000000000000' AND [UserId] <> '00000000-0000-0000-0000-000000000000'");
+
+                            t.HasCheckConstraint("CK_FinancialAuditEntries_Summary", "ISJSON([SummaryJson]) = 1 AND DATALENGTH([SummaryJson]) <= 8192");
+
+                            t.HasCheckConstraint("CK_FinancialAuditEntries_Utc", "DATEPART(TZOFFSET, [RecordedAtUtc]) = 0 AND [RecordedAtUtc] > CONVERT(datetimeoffset(7), '0001-01-01T00:00:00+00:00')");
+                        });
+
+                    b.HasAnnotation("SqlServer:UseSqlOutputClause", false);
+                });
+
+            modelBuilder.Entity("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialOpeningVersionRecord", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Currency")
+                        .HasColumnType("varchar(3)");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("BatchId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("OpeningOperationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("OpeningOperationKind")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("PreviousRevision")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("UserId", "Currency", "AccountId", "Revision");
+
+                    b.HasIndex("UserId", "BatchId");
+
+                    b.HasIndex("UserId", "OpeningOperationId")
+                        .IsUnique()
+                        .HasFilter("[OpeningOperationId] IS NOT NULL");
+
+                    b.HasIndex("UserId", "Currency", "AccountId", "PreviousRevision");
+
+                    b.HasIndex("UserId", "Currency", "BatchId", "OpeningOperationId", "OpeningOperationKind");
+
+                    b.ToTable("FinancialOpeningVersions", null, t =>
+                        {
+                            t.HasTrigger("TR_FinancialOpeningVersions_AppendOnly");
+
+                            t.HasCheckConstraint("CK_FinancialOpeningVersions_Currency", "[Currency] COLLATE Latin1_General_100_BIN2 IN ('DOP','USD') AND DATALENGTH([Currency]) = 3");
+
+                            t.HasCheckConstraint("CK_FinancialOpeningVersions_Opening", "([OpeningOperationId] IS NULL AND [OpeningOperationKind] IS NULL)\nOR ([OpeningOperationId] IS NOT NULL AND [OpeningOperationKind] IS NOT NULL AND [OpeningOperationKind] = 1)");
+
+                            t.HasCheckConstraint("CK_FinancialOpeningVersions_Reason", "DATALENGTH([Reason]) BETWEEN 2 AND 400 AND DATALENGTH([Reason]) = DATALENGTH(TRIM(NCHAR(9) + NCHAR(10) + NCHAR(11) + NCHAR(12) + NCHAR(13) + NCHAR(32) + NCHAR(133) + NCHAR(160) + NCHAR(5760) + NCHAR(8192) + NCHAR(8193) + NCHAR(8194) + NCHAR(8195) + NCHAR(8196) + NCHAR(8197) + NCHAR(8198) + NCHAR(8199) + NCHAR(8200) + NCHAR(8201) + NCHAR(8202) + NCHAR(8232) + NCHAR(8233) + NCHAR(8239) + NCHAR(8287) + NCHAR(12288) FROM [Reason]))");
+
+                            t.HasCheckConstraint("CK_FinancialOpeningVersions_Revision", "([Revision] = 1 AND [PreviousRevision] IS NULL)\nOR ([Revision] > 1 AND [PreviousRevision] IS NOT NULL AND [PreviousRevision] = [Revision] - 1)");
+                        });
+
+                    b.HasAnnotation("SqlServer:UseSqlOutputClause", false);
+                });
+
+            modelBuilder.Entity("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialOperationRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("Amount")
+                        .HasPrecision(28, 2)
+                        .HasColumnType("decimal(28,2)");
+
+                    b.Property<Guid>("BatchId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasColumnType("varchar(3)");
+
+                    b.Property<Guid?>("DestinationAccountId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("OriginalOperationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("OriginalOperationKind")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid?>("SourceAccountId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "BatchId");
+
+                    b.HasIndex("UserId", "OriginalOperationId")
+                        .IsUnique()
+                        .HasFilter("[OriginalOperationId] IS NOT NULL");
+
+                    b.HasIndex("UserId", "Currency", "DestinationAccountId", "BatchId");
+
+                    b.HasIndex("UserId", "Currency", "OriginalOperationId", "OriginalOperationKind");
+
+                    b.HasIndex("UserId", "Currency", "SourceAccountId", "BatchId");
+
+                    b.ToTable("FinancialOperations", null, t =>
+                        {
+                            t.HasTrigger("TR_FinancialOperations_AppendOnly");
+
+                            t.HasCheckConstraint("CK_FinancialOperations_Currency", "[Currency] COLLATE Latin1_General_100_BIN2 IN ('DOP','USD') AND DATALENGTH([Currency]) = 3");
+
+                            t.HasCheckConstraint("CK_FinancialOperations_Ids", "[Id] <> '00000000-0000-0000-0000-000000000000' AND [UserId] <> '00000000-0000-0000-0000-000000000000' AND [BatchId] <> '00000000-0000-0000-0000-000000000000'");
+
+                            t.HasCheckConstraint("CK_FinancialOperations_Reason", "[Reason] IS NULL OR (DATALENGTH([Reason]) BETWEEN 2 AND 400 AND DATALENGTH([Reason]) = DATALENGTH(TRIM(NCHAR(9) + NCHAR(10) + NCHAR(11) + NCHAR(12) + NCHAR(13) + NCHAR(32) + NCHAR(133) + NCHAR(160) + NCHAR(5760) + NCHAR(8192) + NCHAR(8193) + NCHAR(8194) + NCHAR(8195) + NCHAR(8196) + NCHAR(8197) + NCHAR(8198) + NCHAR(8199) + NCHAR(8200) + NCHAR(8201) + NCHAR(8202) + NCHAR(8232) + NCHAR(8233) + NCHAR(8239) + NCHAR(8287) + NCHAR(12288) FROM [Reason])))");
+
+                            t.HasCheckConstraint("CK_FinancialOperations_Shape", "(\n  [Kind] IN (1,2,3,4) AND [Amount] IS NOT NULL AND [Amount] > 0\n  AND [OriginalOperationId] IS NULL AND [OriginalOperationKind] IS NULL\n  AND (\n    ([Kind] IN (1,2) AND [SourceAccountId] IS NULL AND [DestinationAccountId] IS NOT NULL)\n    OR ([Kind] = 3 AND [SourceAccountId] IS NOT NULL AND [DestinationAccountId] IS NULL)\n    OR ([Kind] = 4 AND [SourceAccountId] IS NOT NULL AND [DestinationAccountId] IS NOT NULL AND [SourceAccountId] <> [DestinationAccountId])\n  )\n  AND ([Kind] <> 1 OR [Reason] IS NOT NULL)\n)\nOR (\n  [Kind] = 5 AND [Amount] IS NULL AND [SourceAccountId] IS NULL AND [DestinationAccountId] IS NULL\n  AND [OriginalOperationId] IS NOT NULL AND [OriginalOperationId] <> [Id]\n  AND [OriginalOperationKind] IS NOT NULL AND [OriginalOperationKind] IN (1,2,3,4)\n  AND [Reason] IS NOT NULL\n)");
+                        });
+
+                    b.HasAnnotation("SqlServer:UseSqlOutputClause", false);
+                });
+
+            modelBuilder.Entity("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialPostingBatchRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AccountingTimeZone")
+                        .IsRequired()
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<int>("CommandType")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("EffectiveDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTimeOffset>("RecordedAtUtc")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<long>("Sequence")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Sequence"));
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    SqlServerKeyBuilderExtensions.IsClustered(b.HasKey("Id"), false);
+
+                    b.HasIndex("Sequence")
+                        .IsUnique();
+
+                    SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("Sequence"));
+
+                    b.HasIndex("UserId", "EffectiveDate", "Sequence");
+
+                    b.ToTable("FinancialPostingBatches", null, t =>
+                        {
+                            t.HasTrigger("TR_FinancialPostingBatches_AppendOnly");
+
+                            t.HasCheckConstraint("CK_FinancialPostingBatches_Command", "[CommandType] IN (1,2,3,4,5,6)");
+
+                            t.HasCheckConstraint("CK_FinancialPostingBatches_Ids", "[Id] <> '00000000-0000-0000-0000-000000000000' AND [UserId] <> '00000000-0000-0000-0000-000000000000'");
+
+                            t.HasCheckConstraint("CK_FinancialPostingBatches_Utc", "DATEPART(TZOFFSET, [RecordedAtUtc]) = 0 AND [RecordedAtUtc] > CONVERT(datetimeoffset(7), '0001-01-01T00:00:00+00:00')");
+
+                            t.HasCheckConstraint("CK_FinancialPostingBatches_Zone", "[AccountingTimeZone] COLLATE Latin1_General_100_BIN2 = 'America/Santo_Domingo' AND DATALENGTH([AccountingTimeZone]) = 21");
+                        });
+
+                    b.HasAnnotation("SqlServer:UseSqlOutputClause", false);
+                });
+
+            modelBuilder.Entity("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialRequestOutcomeRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("CommandType")
+                        .HasColumnType("int");
+
+                    b.Property<int>("FingerprintVersion")
+                        .HasColumnType("int");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasColumnType("varchar(128)")
+                        .UseCollation("Latin1_General_100_BIN2");
+
+                    b.Property<int>("OutcomeKind")
+                        .HasColumnType("int");
+
+                    b.Property<string>("PayloadFingerprint")
+                        .IsRequired()
+                        .HasColumnType("char(64)");
+
+                    b.Property<string>("ReceiptJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTimeOffset>("RecordedAtUtc")
+                        .HasColumnType("datetimeoffset(7)");
+
+                    b.Property<string>("ResultCode")
+                        .IsRequired()
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "BatchId")
+                        .IsUnique()
+                        .HasFilter("[BatchId] IS NOT NULL");
+
+                    b.HasIndex("UserId", "CommandType", "BatchId");
+
+                    b.HasIndex("UserId", "CommandType", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.ToTable("FinancialRequestOutcomes", null, t =>
+                        {
+                            t.HasTrigger("TR_FinancialRequestOutcomes_AppendOnly");
+
+                            t.HasCheckConstraint("CK_FinancialRequestOutcomes_Code", "DATALENGTH([ResultCode]) BETWEEN 1 AND 64 AND [ResultCode] COLLATE Latin1_General_100_BIN2 NOT LIKE '%[^A-Za-z0-9_.-]%'");
+
+                            t.HasCheckConstraint("CK_FinancialRequestOutcomes_Command", "[CommandType] IN (1,2,3,4,5,6)");
+
+                            t.HasCheckConstraint("CK_FinancialRequestOutcomes_Fingerprint", "DATALENGTH([PayloadFingerprint]) = 64 AND [PayloadFingerprint] COLLATE Latin1_General_100_BIN2 NOT LIKE '%[^0-9A-F]%' AND [FingerprintVersion] > 0");
+
+                            t.HasCheckConstraint("CK_FinancialRequestOutcomes_Ids", "[Id] <> '00000000-0000-0000-0000-000000000000' AND [UserId] <> '00000000-0000-0000-0000-000000000000'");
+
+                            t.HasCheckConstraint("CK_FinancialRequestOutcomes_Key", "DATALENGTH([IdempotencyKey]) BETWEEN 1 AND 128 AND [IdempotencyKey] NOT LIKE '%[^A-Za-z0-9_-]%' COLLATE Latin1_General_100_BIN2");
+
+                            t.HasCheckConstraint("CK_FinancialRequestOutcomes_Receipt", "ISJSON([ReceiptJson]) = 1 AND DATALENGTH([ReceiptJson]) <= 32768");
+
+                            t.HasCheckConstraint("CK_FinancialRequestOutcomes_Result", "([OutcomeKind] = 1 AND [BatchId] IS NOT NULL) OR ([OutcomeKind] = 2 AND [BatchId] IS NULL)");
+
+                            t.HasCheckConstraint("CK_FinancialRequestOutcomes_Utc", "DATEPART(TZOFFSET, [RecordedAtUtc]) = 0 AND [RecordedAtUtc] > CONVERT(datetimeoffset(7), '0001-01-01T00:00:00+00:00')");
+                        });
+
+                    b.HasAnnotation("SqlServer:UseSqlOutputClause", false);
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<System.Guid>", b =>
                 {
                     b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", null)
@@ -321,6 +659,96 @@ namespace VaultFinance.Infrastructure.Persistence.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialAuditEntryRecord", b =>
+                {
+                    b.HasOne("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialRequestOutcomeRecord", null)
+                        .WithMany()
+                        .HasForeignKey("UserId", "OutcomeId")
+                        .HasPrincipalKey("UserId", "Id")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialOpeningVersionRecord", b =>
+                {
+                    b.HasOne("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialPostingBatchRecord", null)
+                        .WithMany()
+                        .HasForeignKey("UserId", "BatchId")
+                        .HasPrincipalKey("UserId", "Id")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("VaultFinance.Domain.Accounts.Account", null)
+                        .WithMany()
+                        .HasForeignKey("UserId", "Currency", "AccountId")
+                        .HasPrincipalKey("UserId", "Currency", "Id")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialOpeningVersionRecord", null)
+                        .WithMany()
+                        .HasForeignKey("UserId", "Currency", "AccountId", "PreviousRevision")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialOperationRecord", null)
+                        .WithMany()
+                        .HasForeignKey("UserId", "Currency", "BatchId", "OpeningOperationId", "OpeningOperationKind")
+                        .HasPrincipalKey("UserId", "Currency", "BatchId", "Id", "Kind")
+                        .OnDelete(DeleteBehavior.NoAction);
+                });
+
+            modelBuilder.Entity("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialOperationRecord", b =>
+                {
+                    b.HasOne("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialPostingBatchRecord", null)
+                        .WithMany()
+                        .HasForeignKey("UserId", "BatchId")
+                        .HasPrincipalKey("UserId", "Id")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("VaultFinance.Domain.Accounts.Account", null)
+                        .WithMany()
+                        .HasForeignKey("UserId", "Currency", "DestinationAccountId")
+                        .HasPrincipalKey("UserId", "Currency", "Id")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("VaultFinance.Domain.Accounts.Account", null)
+                        .WithMany()
+                        .HasForeignKey("UserId", "Currency", "SourceAccountId")
+                        .HasPrincipalKey("UserId", "Currency", "Id")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialOperationRecord", null)
+                        .WithMany()
+                        .HasForeignKey("UserId", "Currency", "OriginalOperationId", "OriginalOperationKind")
+                        .HasPrincipalKey("UserId", "Currency", "Id", "Kind")
+                        .OnDelete(DeleteBehavior.NoAction);
+                });
+
+            modelBuilder.Entity("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialPostingBatchRecord", b =>
+                {
+                    b.HasOne("VaultFinance.Infrastructure.Identity.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialRequestOutcomeRecord", b =>
+                {
+                    b.HasOne("VaultFinance.Infrastructure.Identity.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("VaultFinance.Infrastructure.Persistence.FinancialJournal.FinancialPostingBatchRecord", null)
+                        .WithMany()
+                        .HasForeignKey("UserId", "CommandType", "BatchId")
+                        .HasPrincipalKey("UserId", "CommandType", "Id")
+                        .OnDelete(DeleteBehavior.NoAction);
                 });
 #pragma warning restore 612, 618
         }

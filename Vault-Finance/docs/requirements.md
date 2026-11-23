@@ -56,7 +56,7 @@ One user may own accounts in different currencies: DOP and USD. This supersedes 
 
 [ADR-002](decisions/ADR-002-financial-operation-journal.md) and the [financial engine design](financial-engine-design.md) govern the immutable journal and derived balances. No overdrafts, credit accounts, negative openings, user backdating or partial reversals. Recording uses UTC and America/Santo_Domingo accounting dates. Reversal is full and at most once per original; archived-account reversals require a controlled exception preserving nonnegative balances.
 
-The current increment implements only bounded FinancialAmount, FinancialPostingContext, operation kind/status and immutable FinancialOperation factories with direct Domain tests. It adds no persistence, financial endpoints, balances or posting services. Explicit zero opening revisions, atomic opening correction, lifetime owner/type/key idempotency, audit, deterministic account locks and the single transactional writer remain future work. Domain construction alone does not establish their SQL guarantees.
+Domain implements bounded FinancialAmount, FinancialPostingContext, operation kind/status and immutable FinancialOperation factories. The persistence increment adds Infrastructure journal records, an additive migration, structural constraints, an effects view and dedicated real SQL tests, without changing Domain. Opening-version, outcome and audit storage exists. Atomic opening correction, operational lifetime owner/type/key replay, financial audit production, deterministic locks and the single transactional writer remain future work. No financial endpoints, balances or posting services are implemented; schema constraints alone do not establish those guarantees.
 
 ## Quality requirements
 

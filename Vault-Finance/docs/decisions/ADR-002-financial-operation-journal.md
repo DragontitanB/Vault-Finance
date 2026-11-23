@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-23
-- Scope: Accepted MVP architecture; only pure Domain increment 1 implemented now
+- Scope: Accepted MVP architecture; Domain and journal storage implemented, financial writer still deferred
 - Contract: [Financial Engine Design](../financial-engine-design.md)
 
 ## Decision
@@ -27,7 +27,7 @@ Confirmed operations cannot be edited/deleted. There is no mutable reversed flag
 - Retain keys/fingerprints/results and audit for the MVP lifetime.
 - All financial writes use one permission-hardened transactional writer; runtime direct financial DML is not an alternative.
 
-These are closed architecture decisions. Provider mappings, constraints, procedure/role behavior and native concurrency still require subsequent evidence. None are implemented now.
+These are closed architecture decisions. Provider mappings and schema constraints are now implemented and tested in a dedicated SQL database. The posting procedure, runtime roles, financial atomicity and native writer concurrency still require subsequent implementation/evidence.
 
 ## Future SQL guarantees
 
@@ -39,18 +39,24 @@ Composite FKs, CHECKs, uniqueness and permissions complement Domain/Application 
 
 Idempotency provides at most one committed result per owner/type/key, not exactly-once external delivery. Resolve ambiguous commit using the same scope and a fresh connection.
 
-## Domain increment authorized now
+## Implemented Domain boundary
 
-Implement FinancialAmount, immutable FinancialPostingContext, kind/status enums and sealed FinancialOperation factories for Opening, Income, Expense, Transfer and Reversal.
+Domain implements FinancialAmount, immutable FinancialPostingContext, kind/status enums and sealed FinancialOperation factories for Opening, Income, Expense, Transfer and Reversal.
 
 Validate positive/range/precision/currency, IDs, account snapshots, UTC/calendar metadata and local reversal causality. Creating a reversal never mutates its original or proves global uniqueness.
 
-No balance calculator, posting/correction/transfer coordinator, data access, migrations, financial endpoints or new packages.
+Domain remains independent of data access and frameworks. There is no balance calculator, posting/correction/transfer coordinator or financial endpoint.
+
+## Persistence increment
+
+Infrastructure maps dedicated storage records without changing Domain. The additive FinancialJournalPersistence migration creates batches, operations, opening versions, outcomes and audit, plus a read-only effects view and append-only triggers. It adds only the necessary Accounts owner/currency key and leaves Identity/InitialPersistence unchanged.
+
+The migration is validated only in the marked VaultFinanceJournalTests database. SQL uniqueness protects original-reversal and owner/type/key scopes; it does not perform funds checks, payload replay or complete-batch confirmation. Cross-row lifecycle/calendar/correction checks and least-privilege INSERT permissions remain writer obligations. See the [persistence contract and evidence](../financial-journal-persistence.md). ADR status remains Accepted.
 
 ## Alternatives and consequences
 
 Full double entry is deferred until liabilities, splits, counterpart accounts or accounting statements justify it. Independent transfer rows, mutable balances as sole truth, editing/deleting confirmed history, event sourcing, distributed locks and generic repositories are not selected.
 
-Batch/revision concepts are necessary for approved atomic opening replacement and explicit zero initialization. They are future persistence contracts, not extra Domain entities implemented speculatively here.
+Batch/revision storage supports approved atomic opening replacement and explicit zero initialization. No extra Domain entities or financial Application workflows are introduced by that storage.
 
 Known costs are serialized hot-account writes, aggregate reads, constraints/roles, and no partial reversals or user backdating. Revisit with a new ADR when requirements change; representation migration must preserve provenance, receipts, balances and reversal history.

@@ -4,11 +4,13 @@ Vault Finance is a personal finance portfolio project focused on .NET backend ar
 
 ## Current status
 
-The project provides a .NET 10 solution, Clean Architecture, Money/Account and immutable financial operation domain types, EF Core 10 SQL Server account persistence, and ASP.NET Core Identity stores with Guid keys. The API exposes process liveness and development-only OpenAPI. Application has no financial posting use cases yet.
+The project provides a .NET 10 solution, Clean Architecture, immutable financial domain types, EF Core 10 SQL Server account/journal storage, and ASP.NET Core Identity stores with Guid keys. The API exposes process liveness and development-only OpenAPI. Application has no financial posting use cases yet.
 
-The API implements registration, cookie login/logout, current-user lookup, CSRF bootstrap, and owner-scoped account creation/listing/detail/rename/archive. Identity owns password validation/hashing, normalization, and temporary lockout. Financial primitives validate local immutable descriptors only: no balance calculator, financial persistence, posting service, financial endpoints, budgets, dashboard or frontend. Money, Account and the applied persistence migration remain unchanged.
+The API implements registration, cookie login/logout, current-user lookup, CSRF bootstrap, and owner-scoped account creation/listing/detail/rename/archive. Identity owns password validation/hashing, normalization, and temporary lockout. Journal storage has an additive migration validated only in a dedicated test database. There is no financial writer, balance calculator, posting service, financial endpoint, budget, dashboard or frontend. Domain and the initial migration remain unchanged.
 
 ADR-002 is Accepted. Financial amounts are positive and bounded by decimal(28,2), using DOP/USD. Confirmed descriptors have no mutation/confirmation-again API; reversal references the original without editing it. UTC recording metadata derives an America/Santo_Domingo effective date. Creating a descriptor does not prove funds, global reversal uniqueness or SQL commit. See the [financial engine contract](docs/financial-engine-design.md) and [domain usage examples](docs/domain-model.md).
+
+Current validation: restore succeeded; build had zero warnings/errors; all 126 unit and 176 integration cases passed, with zero skips. Of the integration cases, 24 configuration/safety and 43 real SQL cases are new. The new migration was applied only to the marked VaultFinanceJournalTests database. See [schema, constraints, SQL test safety and controlled migration commands](docs/financial-journal-persistence.md).
 
 ## Prerequisites
 
@@ -31,7 +33,7 @@ dotnet test VaultFinance.slnx --no-build --no-restore
 
 Unit tests reference Domain directly and exercise Money, Account and financial primitives without API hosting or infrastructure. They cover validation, normalization, value equality, exact signed arithmetic, currency compatibility, decimal limits, renaming/archiving, operation shapes, recording dates, causal reversal references and immutability. Integration tests start the actual application through `WebApplicationFactory<Program>`, verify anonymous `GET /health` in Development and Production, and verify that OpenAPI is exposed only in Development. Their in-memory server uses an HTTPS request scheme but does not exercise certificate trust, TLS negotiation, or a real network socket.
 
-For this Domain-only increment, run the above commands with `$env:VAULTFINANCE_SQL_TESTS = '0'` to avoid opt-in tests that write synthetic SQL data. Actual validation: restore succeeded; build had zero warnings/errors; 126 unit tests (54 new) and 29 integration tests passed; 32 opt-in SQL tests were skipped. No SQL writes or migration commands were executed. SQL-theory discovery expands differently when enabled, so this is not a re-certification of the previous 181-case SQL-enabled run.
+Set `$env:VAULTFINANCE_SQL_TESTS = '0'` for tests that do not require SQL. SQL facts/theories are explicitly skipped in that mode. The previous Domain-only run had 126 unit and 29 ordinary integration passes, plus 32 skipped SQL methods; enabling those theories expands their cases. The current full SQL-enabled result is reported above.
 
 Additional configuration tests verify Identity cookie/antiforgery settings, EF mappings, rejection of another database target, and liveness without a connection string even when an authentication cookie is supplied. Health short-circuits after HTTPS redirection, before Identity can consult SQL. SQL tests are skipped unless explicitly enabled; there is no EF InMemory substitute.
 
@@ -86,26 +88,28 @@ Review the generated operations before applying them. Do not use the initial-sch
 
 The initial migration is 20261123172009_InitialPersistence. It creates dbo.Accounts, AspNetUsers, AspNetRoles, AspNetUserClaims, AspNetRoleClaims, AspNetUserLogins, AspNetUserRoles, AspNetUserTokens, and __EFMigrationsHistory.
 
-Accounts uses Guid identifiers, nvarchar(100) names, varchar(3) uppercase DOP/USD currency, integer status, CHECK constraints, owner/status indexes, and a restricted-delete foreign key to AspNetUsers. One user can own accounts in both currencies. Money has no persistent property yet, so there is no Money table or invented balance column.
+Accounts uses Guid identifiers, nvarchar(100) names, varchar(3) uppercase DOP/USD currency, integer status, CHECK constraints, owner/status indexes, and a restricted-delete foreign key to AspNetUsers. One user can own accounts in both currencies. The new journal migration adds only an Accounts ownership/currency alternate key, five financial storage tables, append-only triggers and a read-only effects view. There is no Money table or balance column.
 
-To run the real SQL tests after applying the migration, use the Windows user that can access SQL Server and the API's User Secrets:
+SQL tests require the separate ConnectionStrings:SqlTestConnection in API User Secrets or ConnectionStrings__SqlTestConnection in the environment. It must target exactly the local, project-owned VaultFinanceJournalTests database, never VaultFinanceDb. Preserve approved SQL transport security settings; no connection value is committed. For the first explicit test-database creation:
 
 ```powershell
 $env:VAULTFINANCE_SQL_TESTS = '1'
+$env:VAULTFINANCE_SQL_TESTS_CREATE_DATABASE = '1'
 try {
     dotnet test VaultFinance.slnx --no-build --no-restore
 } finally {
     $env:VAULTFINANCE_SQL_TESTS = $null
+    $env:VAULTFINANCE_SQL_TESTS_CREATE_DATABASE = $null
 }
 ```
 
-The SQL fixture permits only local SQLEXPRESS/VaultFinanceDb with Windows authentication and refuses pending migrations. Each test starts a transaction, uses synthetic Guid identities and example.invalid names, and rolls back on disposal, including on assertion failure. Tests never migrate, create/drop databases, or delete existing records for cleanup.
+For later runs, omit the creation flag. The fixture verifies the database ownership marker, rejects foreign tables/history, and applies migrations only to that dedicated database. Most tests roll back synthetic data. One history test commits a minimal synthetic group and verifies preservation through another connection; those append-only records remain isolated in the test database. No database is dropped/reset or existing data deleted for cleanup. See the [complete lifecycle and optional test script](docs/financial-journal-persistence.md).
 
 Authentication HTTP tests use WebApplicationFactory with the real SQL provider and a shared transaction across the request scopes of each test. Passwords and email addresses are generated synthetically; every test rolls back, including on failure. The test-only Data Protection provider is ephemeral and does not replace production key storage or certificate validation.
 
-The account suite uses two independent authenticated cookie jars per test against real SQL Server, with the same rollback isolation. It covers foreign-ID reads/writes, owner-only lists, strict DTOs, domain validation, archive idempotence, CSRF, paging, sorting, and a stale-snapshot rename after archive. Previous test sources are unchanged.
+The account suite uses two independent authenticated cookie jars per test against real SQL Server, with the same rollback isolation. It covers foreign-ID reads/writes, owner-only lists, strict DTOs, domain validation, archive idempotence, CSRF, paging, sorting, and a stale-snapshot rename after archive. The previous ownership/currency persistence assertion now includes the earlier EF alternate-key rejection.
 
-Historical account-management validation, before the financial Domain increment: SQL-enabled restore/build succeeded and all 72 unit and 109 integration cases passed without skips. That result is retained as history; see the current Domain-only validation above.
+Historical account-management validation was 72 unit + 109 integration = 181 passes. The current result is 126 + 176 = 302 passes; the additional financial persistence cases establish schema/storage behavior, not financial writer correctness.
 
 ## Authentication and CSRF
 
@@ -244,6 +248,7 @@ docs/
   domain-model.md
   security.md
   financial-engine-design.md
+  financial-journal-persistence.md
   decisions/ADR-001-modular-monolith.md
   decisions/ADR-002-financial-operation-journal.md
 ```
@@ -252,7 +257,7 @@ docs/
 | --- | --- | --- |
 | Domain | Money, Account, immutable financial descriptors and local invariants | None |
 | Application | Authentication contracts and account use cases/DTOs/store port | Domain |
-| Infrastructure | SQL Server account adapter and Identity-backed authentication | Application, Domain |
+| Infrastructure | SQL Server account/journal storage and Identity-backed authentication | Application, Domain |
 | Api | HTTP endpoints and composition root | Application, Infrastructure |
 | UnitTests | Isolated domain behavior and financial descriptor checks | Domain |
 | IntegrationTests | HTTP/configuration checks and opt-in real SQL tests | Api, Infrastructure |
@@ -277,6 +282,7 @@ Data Protection uses application name VaultFinance and the Windows profile's nor
 - [Planned security strategy](docs/security.md)
 - [ADR-001: Modular monolith](docs/decisions/ADR-001-modular-monolith.md)
 - [Accepted financial engine contracts and implementation increments](docs/financial-engine-design.md)
+- [Implemented journal schema, dedicated SQL tests and migration commands](docs/financial-journal-persistence.md)
 - [ADR-002: Immutable financial operation journal](docs/decisions/ADR-002-financial-operation-journal.md)
 
 Implementation references: [ASP.NET Core integration testing](https://learn.microsoft.com/en-us/aspnet/core/test/integration-tests?view=aspnetcore-10.0) and [OpenAPI document generation](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/openapi/aspnetcore-openapi?view=aspnetcore-10.0).

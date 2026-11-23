@@ -1,12 +1,12 @@
 # Financial Engine Design
 
-Status: Accepted architecture; pure Domain increment 1 only. Updated: 2026-11-23.
+Status: Accepted architecture; Domain primitives and journal persistence implemented. Updated: 2026-11-23.
 
-Vault Finance records simulated personal-finance assertions, not bank funds, custody, settlement, or credit. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the accepted architecture. There is no financial persistence, migration, writer, balance calculator, correction coordinator, or endpoint in this increment.
+Vault Finance records simulated personal-finance assertions, not bank funds, custody, settlement, or credit. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the accepted architecture. The [journal persistence increment](financial-journal-persistence.md) adds storage/schema verified in a dedicated SQL database. There is still no financial writer, balance calculator, correction coordinator, Application command or endpoint.
 
 ## 1. Review and resolved contradictions
 
-Money and Account remain unchanged. Money accepts signed/zero decimal values, DOP/USD, two effective decimal places, and the CLR decimal range. Account has immutable identity/owner/currency and Active/Archived states, but no balance, opening information, reactivation, or creation timestamp. Existing EF maps accounts and Identity only.
+Money, Account and FinancialOperation remain unchanged. Money accepts signed/zero decimal values, DOP/USD, two effective decimal places, and the CLR decimal range. Account has immutable identity/owner/currency and Active/Archived states, but no balance, opening information, reactivation, or creation timestamp. EF now also maps Infrastructure journal records, preserving the Domain API and stored historical dates.
 
 | Earlier proposal | Accepted resolution |
 | --- | --- |
@@ -123,13 +123,13 @@ A standalone reversal of the current opening must append the next zero revision 
 
 Archived accounts allow qualifying exact cancellation/reversal if the final balance stays nonnegative. A positive opening replacement requires Active status. No account reactivation is introduced.
 
-This increment contains only positive Opening/Reversal descriptors: no opening-version entity, zero-initialization command, correction service or batch coordinator is implemented.
+Domain contains positive Opening/Reversal descriptors. Infrastructure now stores opening-version metadata, including explicit zero revisions. No zero-initialization command, correction service or batch coordinator is implemented.
 
 ## 8. Precision and mapping obligations
 
 decimal(28,2) has 26 integer digits and a coefficient that fits CLR decimal across the column range. This is an approved financial business bound, not a change to Money. Full-range generic Money must not silently be stored in a narrower column.
 
-Provider round trips must still be proved before migration. SQL parameter conversion can round: reject 1.001 before binding, preserve insignificant zeros such as 1.2300, and never route values through float/double.
+Provider round trips for the maximum, trailing zeros and UTC/date facts are now proved against the dedicated SQL Server test database. SQL parameter conversion can round: reject 1.001 before binding, preserve insignificant zeros such as 1.2300, and never route values through float/double. The real SQL test explicitly demonstrates the raw-conversion limit; the future writer must retain early validation.
 
 SUM(decimal) returns decimal(38, scale). Range-check the aggregate before conversion. Do not add unchecked decimal(38,2) aggregates: the result may need scale reduction. Cast validated bounded balances to decimal(28,2) before arithmetic; two operands produce decimal(29,2). Correction intermediates may be signed/wider but must retain scale 2 and satisfy the final bound.
 
@@ -139,11 +139,11 @@ Future currencies requiring other scales need an explicit Money/currency/schema/
 
 References: [SQL precision/scale](https://learn.microsoft.com/en-us/sql/t-sql/data-types/precision-scale-and-length-transact-sql?view=sql-server-ver15), [SUM types](https://learn.microsoft.com/en-us/sql/t-sql/functions/sum-transact-sql?view=sql-server-ver15), [IANA zones in .NET](https://learn.microsoft.com/en-us/dotnet/api/system.timezoneinfo.findsystemtimezonebyid?view=net-10.0).
 
-## 9. Future relational schema: no changes now
+## 9. Relational schema and writer obligations
 
-Existing Account mapping and InitialPersistence remain untouched. Future financial FKs use NO ACTION; runtime history is append-only.
+InitialPersistence and Domain remain untouched. Accounts gains only an owner/currency alternate key supporting financial FKs. Financial FKs use NO ACTION and the five journal tables have append-only EF guards and SQL triggers. The new migration is validated in VaultFinanceJournalTests only, not applied to VaultFinanceDb. See financial-journal-persistence.md for exact mappings, indexes, review and commands.
 
-| Future relation | Purpose |
+| Implemented relation | Purpose |
 | --- | --- |
 | FinancialPostingBatches | Owner, command type, UTC/effective date/timezone, batch ID and sequence; indivisible confirmation boundary |
 | FinancialOperations | Owner/currency/batch, kind/reason, positive ordinary magnitude/participants or original reversal reference |
@@ -152,20 +152,20 @@ Existing Account mapping and InitialPersistence remain untouched. Future financi
 | FinancialAuditEntries | One immutable event for each newly finalized outcome, linking to the complete batch through that outcome |
 | AccountMovements projection | Read-only signed effects of ordinary rows and original-reference inverses |
 
-Required future constraints/indexes:
+Required constraints/indexes, implemented with the cross-row limits below:
 
 - Account candidate key (UserId, Currency, Id), preserving current types/collation.
 - Same-owner/currency/batch composite FKs and immutable original references.
 - Explicit null/shape checks: ordinary positive magnitudes, distinct transfer participants, no copied reversal amount/accounts, valid kind/UTC/range/size limits.
 - Non-reversal self-FK discriminator and filtered unique (UserId, OriginalOperationId), across all command types.
 - Unique opening (UserId, Currency, AccountId, Revision); one root at revision 1; predecessor FK/check for revision minus one.
-- Positive version references tied to Opening kind and the same account/currency/batch. No zero monetary row.
+- Positive version references tied by FK to Opening kind and the same owner/currency/batch. The writer must additionally check that its destination equals the revision's account. No zero monetary row.
 - Unique (UserId, CommandType, IdempotencyKey); same-owner receipt/batch/audit references.
 - Owner/account/effective-date/batch access indexes and original-reference lookup, without indexing large receipts/notes indiscriminately.
 
 CHECK accepts UNKNOWN; nullable branches need explicit IS NULL/IS NOT NULL. Constraints alone cannot require complete cross-row batch/audit membership, current opening selection, status or funds sufficiency. The controlled writer validates those facts before commit.
 
-Mapping timestamps from the batch back into a domain context must preserve persisted historical dates. No mapping or rehydration bypass is added in this increment.
+Storage-record materialization preserves persisted historical dates without calling the Domain context constructor. No Domain rehydration bypass or current-account-based reverse mapper is added.
 
 ## 10. Controlled writer and idempotency
 
@@ -230,22 +230,22 @@ Known limits remain no liabilities, FX, partial reversals, user backdating, gene
 
 Current domain tests cover bounded amounts, each kind, identifiers, ownership/currency/Active snapshots, immutable metadata, UTC/Santo Domingo boundaries, causal reversal references and forbidden mutable transitions. Prior tests are retained.
 
-Not yet proved: sufficient funds, initialization/current revision, global reversal uniqueness, atomic opening replacement/transfer, idempotency, SQL permissions, locking or provider round trips. Later tests require independent connections, actual commit boundaries and fault injection; sequential shared-transaction HTTP fixtures are insufficient.
+Proved storage guarantees now include exact provider round trips, typed/scoped references, original-reversal uniqueness, owner/type/key uniqueness, append-only SQL behavior and migration/model alignment. Not yet proved: sufficient funds, initialization/current revision, complete batches, atomic opening replacement/transfer, operational idempotency, runtime SQL permissions or locking. Later writer tests require independent connections, actual commit boundaries and fault injection; sequential shared-transaction HTTP fixtures are insufficient.
 
 | Increment | Exit evidence |
 | --- | --- |
-| 1: pure Domain, this task | Local factories/value objects and immutability; no data/balance/correction service |
-| 2: isolated SQL feasibility | Exact decimal/date materialization, independent connections and least-privilege roles |
-| 3: additive schema/projection | Ownership keys, revision chains, positive amounts, one reversal and batch metadata |
+| 1: pure Domain, implemented | Local factories/value objects and immutability; no balance/correction service |
+| 2: isolated SQL feasibility, storage verified | Exact decimal/date materialization and independent connections; runtime least-privilege writer roles still deferred |
+| 3: additive schema/projection, implemented | Ownership keys, revision chains, positive amounts, one reversal and batch metadata; dedicated test database only |
 | 4: controlled writer | Atomic outcomes/audit, scoped replay, locks and no partial batches |
 | 5: openings/corrections | Zero metadata, expected revisions, replacement/net-balance rollback |
 | 6: income/expense/transfer/reversal | Overspending races, conservation and archived exception |
 | 7: HTTP/reconciliation | Cookie/CSRF/BOLA, consistent reads, diagnosis and fault injection |
 
-ADR acceptance closes the architecture decisions, not future SQL verification. No new schema or financial endpoint is authorized by this increment. /health remains independent of SQL.
+ADR acceptance closes architecture decisions, not unimplemented writer guarantees. This persistence increment authorizes additive schema/mapping and dedicated SQL validation, but no development database application or financial command/endpoint. /health remains independent of SQL.
 
-Run restore/build and pure-domain/ordinary regressions. SQL opt-in tests that write remain disabled to honor the instruction not to alter SQL Server; their previous results are not re-certified.
+Current validation runs restore/build and the complete SQL-enabled suite against the separate marked database. No tests use the development database for destructive operations or cleanup.
 
-Actual increment-1 validation: restore succeeded; build completed with zero warnings/errors; 126 unit tests passed, including 54 new financial cases; 29 existing integration tests passed, including /health. The runner skipped 32 opt-in SQL tests. No migration, SQL write or financial HTTP call was executed.
+Historical increment-1 validation: 126 unit and 29 ordinary integration tests passed; 32 opt-in SQL methods were skipped. Current persistence validation: restore/build succeeded with zero warnings/errors; 126 unit and 176 integration cases passed, with zero skips. The dedicated migration is applied; the development migration is not. See the persistence document for count expansion, initial failures and exact limits.
 
 References: [SQL locks](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide?view=sql-server-ver15), [application locks](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sp-getapplock-transact-sql?view=sql-server-ver15), [EF transactions](https://learn.microsoft.com/en-us/ef/core/saving/transactions), [commit ambiguity](https://learn.microsoft.com/en-us/ef/core/miscellaneous/connection-resiliency).

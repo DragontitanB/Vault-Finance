@@ -1,7 +1,8 @@
-using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using VaultFinance.Infrastructure;
 using VaultFinance.Infrastructure.Persistence;
 
@@ -18,40 +19,19 @@ public sealed class SqlServerFixture : IAsyncLifetime
             return;
         }
 
-        var configuration = new ConfigurationBuilder()
-            .AddUserSecrets<Program>(optional: true)
-            .AddEnvironmentVariables()
-            .Build();
-        var value = configuration.GetConnectionString("DefaultConnection");
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            throw new InvalidOperationException("SQL tests require the API's DefaultConnection in User Secrets or environment configuration.");
-        }
-
-        var target = new SqlConnectionStringBuilder(value);
-        if (target.InitialCatalog != "VaultFinanceDb" || !target.IntegratedSecurity ||
-            !new[] { @"localhost\SQLEXPRESS", @"DRAGON\SQLEXPRESS", @".\SQLEXPRESS" }
-                .Contains(target.DataSource, StringComparer.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("SQL tests are restricted to local SQLEXPRESS/VaultFinanceDb with Windows authentication.");
-        }
+        var connectionString = SqlTestDatabase.ReadConnectionString();
+        await SqlTestDatabase.EnsureReadyAsync(connectionString);
 
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddInfrastructure(configuration);
+        services.AddInfrastructure(new ConfigurationBuilder().Build());
+        // Keep production's strict VaultFinanceDb guard; replace its registration only in tests.
+        services.RemoveAll<VaultFinanceDbContext>();
+        services.RemoveAll<DbContextOptions<VaultFinanceDbContext>>();
+        services.RemoveAll<IDbContextOptionsConfiguration<VaultFinanceDbContext>>();
+        services.AddDbContext<VaultFinanceDbContext>(options =>
+            options.UseSqlServer(connectionString, sql => sql.UseCompatibilityLevel(150)));
         Provider = services.BuildServiceProvider();
-        await using var scope = Provider.CreateAsyncScope();
-        var context = scope.ServiceProvider.GetRequiredService<VaultFinanceDbContext>();
-        await context.Database.OpenConnectionAsync();
-        if (context.Database.GetDbConnection().Database != "VaultFinanceDb")
-        {
-            throw new InvalidOperationException("Unexpected SQL test database.");
-        }
-
-        if ((await context.Database.GetPendingMigrationsAsync()).Any())
-        {
-            throw new InvalidOperationException("Apply the reviewed migrations before running SQL tests. Tests never migrate or create databases.");
-        }
     }
 
     public async Task DisposeAsync()

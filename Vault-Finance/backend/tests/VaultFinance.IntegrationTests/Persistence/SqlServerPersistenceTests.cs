@@ -114,10 +114,13 @@ public sealed class SqlServerPersistenceTests(SqlServerFixture fixture) : IClass
         var account = new Account(Guid.NewGuid(), user.Id, "Test immutable", "DOP");
         context.Accounts.Add(account);
         await context.SaveChangesAsync();
-        context.Entry(account).Property(property).CurrentValue =
-            property == nameof(Account.UserId) ? Guid.NewGuid() : value;
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => context.SaveChangesAsync());
+        // The journal's composite ownership key now rejects mutation immediately.
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            context.Entry(account).Property(property).CurrentValue =
+                property == nameof(Account.UserId) ? Guid.NewGuid() : value;
+            await context.SaveChangesAsync();
+        });
     }
 
     private static ApplicationUser CreateSyntheticUser()

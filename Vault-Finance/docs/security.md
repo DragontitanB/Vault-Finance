@@ -97,7 +97,11 @@ ASP.NET Core Data Protection uses application name VaultFinance and, locally, th
 
 Before deployment, configure a durable repository outside the deployment directory, encrypted at rest with a certificate or an appropriate managed key service. Restrict access to the service identity. Instances of the same deployment must share protected keys and the same application name; separate environments require separate rings. Preserve old keys needed for unexpired cookies/CSRF tokens across restarts and rotations, and define backup, recovery, compromise response, and retention policies. Losing keys invalidates sessions and request tokens. Tests use a separate ephemeral provider only for isolation, never as a production fallback.
 
-API startup never creates or migrates databases. The initial migration script checks for existing data and foreign tables, restricts writes to local VaultFinanceDb, and performs no destructive cleanup. SQL tests use synthetic identities and rollback-only transactions; they never drop databases or delete existing records.
+API startup never creates or migrates databases. The initial migration script checks for existing data/foreign tables, restricts writes to local VaultFinanceDb, and is explicitly pinned to InitialPersistence. The financial migration is not applied there by this increment.
+
+SQL tests now require a separate SqlTestConnection for VaultFinanceJournalTests. The fixture permits explicit creation only when absent, verifies a database-level project ownership marker before migrations, and refuses unmarked/foreign databases. No development/system database is a test destination. Most synthetic data rolls back; a committed immutable history group used for independent-connection preservation checks is retained. There is no database drop/reset or destructive cleanup. See the [test lifecycle](financial-journal-persistence.md).
+
+Financial journal tables reject UPDATE/DELETE through both EF guards and SQL triggers. Typed/composite FKs enforce owner/currency references, and scoped unique indexes protect stored reversal and idempotency identities. These are structural safeguards, not end-user authorization, operational idempotency or overdraft prevention. Privileged principals can disable triggers; the future single SQL writer must use reviewed least-privilege permissions, validate complete batches/funds/calendar facts, and atomically commit outcome/audit. No financial routes or writer are enabled now.
 
 ## Planned verification
 

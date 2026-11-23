@@ -2,9 +2,9 @@
 
 ## Current structure
 
-Vault Finance is a modular monolith using Clean Architecture: one deployable API and inward-facing compile-time dependencies. Domain implements Money, Account and immutable financial operation primitives. Application owns authentication contracts and account use cases/contracts. Infrastructure implements Identity authentication and the account persistence port using EF Core SQL Server. API owns HTTP endpoints, ProblemDetails mapping, CSRF enforcement, and rate limiting. Account management is implemented; financial posting, persistence and balances are not.
+Vault Finance is a modular monolith using Clean Architecture: one deployable API and inward-facing compile-time dependencies. Domain implements Money, Account and immutable financial operation primitives. Application owns authentication contracts and account use cases/contracts. Infrastructure implements Identity authentication, the account persistence port and financial journal storage using EF Core SQL Server. API owns HTTP endpoints, ProblemDetails mapping, CSRF enforcement, and rate limiting. Financial posting and balances are not implemented.
 
-[ADR-002](decisions/ADR-002-financial-operation-journal.md) accepts the immutable operation journal and [derived balance/writer contract](financial-engine-design.md). Current additions are Domain-only: FinancialAmount, FinancialPostingContext, kind/status enums and sealed FinancialOperation factories. No new references, mappings, services or endpoints are introduced. The future transactional SQL writer must enforce funds, global reversal uniqueness, atomic correction/transfer and lifetime owner/type/key idempotency; immutable construction alone cannot prove these guarantees.
+[ADR-002](decisions/ADR-002-financial-operation-journal.md) accepts the immutable journal and [derived balance/writer contract](financial-engine-design.md). The [persistence increment](financial-journal-persistence.md) maps Infrastructure-owned records, preserving Domain and stored historical dates. SQL uniqueness covers original reversal references and owner/type/key scopes; the future writer must enforce funds, complete batches, atomic correction/transfer and operational idempotency. There are no financial Application use cases or HTTP endpoints.
 
 | Layer | Responsibility | Allowed direct dependencies |
 | --- | --- | --- |
@@ -63,7 +63,7 @@ UnitTests references Domain directly, with no Api or Infrastructure project refe
 
 IntegrationTests references Api, Infrastructure, and Microsoft.AspNetCore.Mvc.Testing. Existing WebApplicationFactory tests remain unchanged. Additional tests verify mappings, secure cookie/antiforgery options, database target validation, and health without DefaultConnection. These configuration/HTTP tests do not require SQL Server.
 
-Opt-in SQL tests use the real local SQL Server 2019 Express instance and migrated VaultFinanceDb. They round-trip Identity users and accounts, including archived accounts and DOP/USD accounts owned by one user; verify SQL constraints, foreign keys, deletion restrictions, and immutable persisted ownership/currency; and roll back every test transaction. They never create/drop databases, migrate, use EnsureCreated, or replace SQL Server with EF InMemory. Set VAULTFINANCE_SQL_TESTS=1 to enable them.
+Opt-in SQL tests require a separate SqlTestConnection for the marked local VaultFinanceJournalTests database. They never fall back to VaultFinanceDb. Explicit creation/migration is allowed only after target/ownership checks; no database is dropped/reset. Most synthetic data rolls back; one committed immutable history group per preservation test is retained. Tests use real SQL Server, including independent connections for metadata/history checks, without EF InMemory. Set VAULTFINANCE_SQL_TESTS=1 to enable; see the dedicated persistence document for lifecycle and results.
 
 ## Persistence and materialization
 
@@ -77,7 +77,9 @@ AccountConfiguration explicitly maps get-only Id, UserId, and Currency so EF can
 
 Accounts has a caller-supplied Guid primary key, an AspNetUsers foreign key using NO ACTION/Restrict deletion, indexes on UserId and (UserId, Status), nvarchar(100) names, varchar(3) currency, and integer status. CHECK constraints enforce non-empty identifiers, trimmed non-empty names, uppercase DOP/USD, and Active/Archived values. EF rejects changes to UserId/Currency after insertion. This guards tracked updates; it is not database authorization against arbitrary privileged SQL.
 
-A user can own multiple accounts in either supported currency. No unique-owner or single-currency-per-user constraint exists. Money is not mapped as an entity or stored independently: no current persistent property uses it. Do not invent balance columns or narrow its full decimal range to decimal(18,2). Future monetary properties require an explicit mapping and precision decision.
+A user can own multiple accounts in either supported currency. No unique-owner or single-currency-per-user constraint exists. Money is not mapped as an entity or stored independently. Journal records explicitly store positive decimal(28,2) magnitudes matching FinancialAmount, not the full generic Money range. No balance column is added. Accounts gains only the composite alternate key required for owner/currency FKs.
+
+FinancialPostingBatchRecord restores stored UTC/date/timezone facts rather than reconstructing FinancialPostingContext. FinancialOperationRecord copies validated descriptors and maps nullable magnitude/participants/original reference through Fluent API. Five append-only tables, typed/composite FKs, unique indexes and a keyless effects view complement future writer validation. SQL triggers and EF guards reject updates/deletes; they do not implement a controlled INSERT writer or prove sufficient funds.
 
 ## Migration operations
 
@@ -85,9 +87,11 @@ The initial migration is 20261123172009_InitialPersistence. API startup never ru
 
 The script is deliberately limited to this initial schema, not a general production deployment tool. Once real data or later migrations exist, use a separately reviewed deployment procedure. It performs no backup, deletion, truncation, seeding, or automatic recovery.
 
+FinancialJournalPersistence (20261123215517) is additive and forward-only. Its reviewed SQL adds no destructive existing-table operation and was applied only to the dedicated test database. The initial script now names InitialPersistence explicitly, preventing implicit application of later migrations. Development application commands and all remaining writer guarantees are documented in financial-journal-persistence.md.
+
 ## Deferred implementation
 
-Account creation, owned listing/detail, rename, and idempotent archive are implemented with owner-scoped authorization. Other financial resource use cases/authorization, email confirmation/recovery/MFA, global session revocation, production Data Protection key storage, distributed abuse protection, general optimistic concurrency/versioning, monetary idempotency, audit persistence, React, and TypeScript remain deferred.
+Account creation, owned listing/detail, rename, and idempotent archive are implemented with owner-scoped authorization. Other financial resource use cases/authorization, email confirmation/recovery/MFA, global session revocation, production Data Protection key storage, distributed abuse protection, general optimistic concurrency/versioning, operational monetary idempotency/auditing, React, and TypeScript remain deferred. Outcome/audit storage exists; execution, replay and financial audit production do not.
 
 Use direct, explicit use-case composition first. Add a port only when a real application use case needs an external capability. Do not add generic repositories, speculative service layers, messaging infrastructure, caching, or mediator packages.
 

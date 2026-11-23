@@ -6,7 +6,7 @@ public sealed class SqlServerFactAttribute : FactAttribute
     {
         if (Environment.GetEnvironmentVariable("VAULTFINANCE_SQL_TESTS") != "1")
         {
-            Skip = "Set VAULTFINANCE_SQL_TESTS=1 to run against the migrated local VaultFinanceDb.";
+            Skip = "Set VAULTFINANCE_SQL_TESTS=1 and configure SqlTestConnection for the marked VaultFinanceJournalTests database.";
         }
     }
 }
@@ -17,7 +17,7 @@ public sealed class SqlServerTheoryAttribute : TheoryAttribute
     {
         if (Environment.GetEnvironmentVariable("VAULTFINANCE_SQL_TESTS") != "1")
         {
-            Skip = "Set VAULTFINANCE_SQL_TESTS=1 to run against the migrated local VaultFinanceDb.";
+            Skip = "Set VAULTFINANCE_SQL_TESTS=1 and configure SqlTestConnection for the marked VaultFinanceJournalTests database.";
         }
     }
 }

@@ -2,7 +2,7 @@
 
 ## Status and conventions
 
-Money and Account retain their existing behavior. Domain now also implements immutable financial operation descriptors and bounded magnitudes as described below. Infrastructure persists only Account and Identity users; the financial descriptors have no mappings or endpoints. Application/API support owned account creation, listing, detail, rename, and archive. Category, Budget, AuditEntry, financial persistence, balances, and posting workflows remain future work.
+Money, Account and the immutable financial Domain types retain their existing behavior. Infrastructure maps Account, Identity users and dedicated financial journal records; Domain entities gain no ORM dependencies, setters or persistence constructors. Application/API support owned account creation, listing, detail, rename, and archive. Category, Budget, balances, financial posting/auditing workflows and financial endpoints remain future work. See the [journal storage model](financial-journal-persistence.md).
 
 Account uses opaque, caller-supplied, non-empty Guid identifiers for Id and UserId. The entity does not generate identifiers or verify that a User exists. Financial timestamps are UTC with America/Santo_Domingo accounting dates. The future trusted writer selects current timestamps; users cannot backdate operations in the MVP.
 
@@ -99,7 +99,7 @@ Currency validation is shared through an internal CurrencyCode helper, so Accoun
 
 Zero initialization is future audited opening-version metadata, not a zero monetary operation. Opening correction will append a full reversal and positive replacement (when needed) in one atomic batch and advance the opening revision.
 
-No opening-version entity, balance calculator, funds check, idempotency store, transfer/correction coordinator, financial data access or financial API is implemented. Global uniqueness, initialization, current owner/status, funds and indivisible confirmation must be checked by the future controlled SQL writer.
+Infrastructure now stores opening versions, operations, batches, outcomes and audit, with typed FKs, scoped uniqueness and append-only guards. There is no additional Domain opening-version entity, balance calculator, funds check, operational replay, transfer/correction coordinator or financial API. Initialization, current owner/status, funds and indivisible confirmation remain the future controlled writer's responsibility.
 
 ```csharp
 using VaultFinance.Domain.FinancialOperations;
@@ -141,4 +141,4 @@ Adding `new Money(1m, "DOP")` to `original` throws DomainException. Creating `ne
 
 ## Persistence and concurrency decisions still required
 
-Account mappings, indexes, constraints, and ownership relationship are implemented in Infrastructure, together with VaultFinanceDbContext and the initial migration. Financial mappings, bounded decimal round trips, the controlled writer, locking, balance queries and persistent idempotency remain future implementation and verification work under ADR-002. Domain has no framework/project dependencies. Existing account use cases authorize ownership; financial descriptor checks do not replace future resource authorization or locked SQL revalidation.
+Account and financial journal mappings, constraints, bounded decimal/date round trips and the new additive migration are implemented and tested on a dedicated SQL database. InitialPersistence is unchanged. The controlled writer, locks, balance queries and operational idempotency remain future work under ADR-002. Domain has no framework/project dependencies. Existing account use cases authorize ownership; financial descriptor checks do not replace future resource authorization or locked SQL revalidation.

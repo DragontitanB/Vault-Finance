@@ -120,7 +120,7 @@ try {
 
     # The master connection above is read-only and disposed. EF receives only the validated target.
     $env:ConnectionStrings__DefaultConnection = $connectionString
-    & dotnet ef database update --project backend/src/VaultFinance.Infrastructure --startup-project backend/src/VaultFinance.Api --context VaultFinanceDbContext -- --environment Development
+    & dotnet ef database update $migrationId --project backend/src/VaultFinance.Infrastructure --startup-project backend/src/VaultFinance.Api --context VaultFinanceDbContext -- --environment Development
     if ($LASTEXITCODE -ne 0) { throw 'EF migration failed. Inspect the preceding error; no errors were suppressed.' }
 } finally {
     [Environment]::SetEnvironmentVariable('ConnectionStrings__DefaultConnection', $previousConnection)

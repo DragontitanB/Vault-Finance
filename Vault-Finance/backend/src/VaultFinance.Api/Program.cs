@@ -1,6 +1,7 @@
 using VaultFinance.Api.Endpoints;
 using VaultFinance.Infrastructure;
 using VaultFinance.Api.Security;
+using VaultFinance.Application.Accounts;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,6 +10,7 @@ builder.Logging.AddConsole();
 
 builder.Services.AddOpenApi();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddScoped<IAccountService, AccountService>();
 builder.Services.AddProblemDetails();
 builder.Services.AddAuthenticationRateLimits();
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 16_384);
@@ -35,6 +37,7 @@ app.UseMiddleware<CsrfProtectionMiddleware>();
 app.UseAuthorization();
 app.UseAntiforgery();
 app.MapAuthenticationEndpoints();
+app.MapAccountEndpoints();
 
 app.MapGet("/health", HealthEndpoint.Handle)
     .WithName("GetHealth")

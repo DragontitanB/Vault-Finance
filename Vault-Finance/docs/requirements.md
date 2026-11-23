@@ -36,7 +36,9 @@ This is domain behavior only. Account opening balances, opening dates, descripti
 
 ## Proposed MVP: remaining work
 
-Iteration 4 implements registration, cookie login/logout, current-user lookup, and CSRF bootstrap. Identity validates passwords and normalizes email, while the API enforces CSRF on all mutations and rate limits login/registration. No schema changes or financial endpoints were required. Email ownership verification, recovery, MFA, production session/key operations, and all financial use cases remain pending.
+Iteration 4 implements registration, cookie login/logout, current-user lookup, and CSRF bootstrap. Identity validates passwords and normalizes email, while the API enforces CSRF on all mutations and rate limits login/registration. No schema changes or financial endpoints were required for that iteration. Account and other financial use cases were still pending at that stage.
+
+Iteration 5 implements authenticated account creation, owner-only listing/detail, rename, and idempotent archive. Inputs reject client ownership/status assignment; responses include currency/state and no balances. Lists have bounded pagination, stable name/Id ordering, and state filters. Every existing-account operation scopes by the server-authenticated owner; foreign/missing IDs both return 404. The existing domain/mapping/schema supports this without migration changes. Opening balances/dates, account types, monetary operations, and frontend remain deferred.
 
 1. Personal identity: register, log in, and log out through ASP.NET Core Identity and secure cookie sessions.
 2. Accounts: create and rename owned accounts, record an opening balance, and archive accounts without losing history.

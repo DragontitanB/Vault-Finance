@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
 
 namespace VaultFinance.Api.Security;
 
@@ -23,6 +25,17 @@ public sealed class CsrfProtectionMiddleware(RequestDelegate next)
         }
 
         var method = context.Request.Method;
+        var endpoint = context.GetEndpoint();
+        // Protected business APIs challenge anonymous callers first. Preserve the existing auth-route CSRF contract.
+        if (!context.Request.Path.StartsWithSegments("/api/v1/auth") &&
+            endpoint?.Metadata.GetMetadata<IAuthorizeData>() is not null &&
+            endpoint.Metadata.GetMetadata<IAllowAnonymous>() is null &&
+            context.User.Identity?.IsAuthenticated != true)
+        {
+            await context.ChallengeAsync();
+            return;
+        }
+
         if (context.GetEndpoint() is not null &&
             !HttpMethods.IsGet(method) && !HttpMethods.IsHead(method) &&
             !HttpMethods.IsOptions(method) && !HttpMethods.IsTrace(method))

@@ -6,7 +6,7 @@ Vault Finance is a personal finance portfolio project focused on .NET backend ar
 
 The project provides a .NET 10 solution, Clean Architecture, Money and Account domain types, EF Core 10 SQL Server persistence, and ASP.NET Core Identity stores with Guid keys. The API exposes process liveness and development-only OpenAPI. Application has no financial use cases yet.
 
-The API implements registration, cookie login/logout, current-user lookup, and CSRF bootstrap. Identity owns password validation/hashing, normalization, and temporary lockout. There are no account CRUD endpoints, account balances, deposits, withdrawals, transactions, transfers, budgets, dashboards, or frontend. Domain and the applied persistence migration remain unchanged.
+The API implements registration, cookie login/logout, current-user lookup, CSRF bootstrap, and owner-scoped account creation/listing/detail/rename/archive. Identity owns password validation/hashing, normalization, and temporary lockout. There are no account balances, deposits, withdrawals, transactions, transfers, budgets, dashboards, or frontend. Domain and the applied persistence migration remain unchanged.
 
 ## Prerequisites
 
@@ -99,7 +99,9 @@ The SQL fixture permits only local SQLEXPRESS/VaultFinanceDb with Windows authen
 
 Authentication HTTP tests use WebApplicationFactory with the real SQL provider and a shared transaction across the request scopes of each test. Passwords and email addresses are generated synthetically; every test rolls back, including on failure. The test-only Data Protection provider is ephemeral and does not replace production key storage or certificate validation.
 
-Verified on local SQL Server 2019 Express: restore succeeded; build had zero warnings/errors; all 72 unit and 48 integration test cases passed with SQL tests enabled and no skips. The database still has the initial migration only, with zero users/accounts after the tests. No model change or new migration was required.
+The account suite uses two independent authenticated cookie jars per test against real SQL Server, with the same rollback isolation. It covers foreign-ID reads/writes, owner-only lists, strict DTOs, domain validation, archive idempotence, CSRF, paging, sorting, and a stale-snapshot rename after archive. Previous test sources are unchanged.
+
+Verified with SQL tests enabled: restore succeeded; build had zero warnings/errors; all 72 unit and 109 integration cases passed without skips. No domain or schema changes were required.
 
 ## Authentication and CSRF
 
@@ -123,7 +125,7 @@ Every matched mutating /api route is protected by the global CSRF guard, includi
 
 ### Reproducible HTTPS requests without saved credentials
 
-Start the API as described below. This PowerShell example uses one cookie jar, prompts for a new synthetic password, and keeps passwords/tokens in memory rather than files or literal command history. It creates one disposable example.invalid user; unlike the automated suite, manual requests persist that user. Do not use real credentials.
+Start the API as described below. This PowerShell example uses one cookie jar, prompts for a new synthetic password, and keeps passwords/tokens in memory rather than files or literal command history. It creates one disposable example.invalid user and an archived demo account; unlike the automated suite, manual requests persist those records. Do not use real credentials.
 
 ```powershell
 $base = 'https://localhost:7143/api/v1/auth'
@@ -143,6 +145,17 @@ $headers = @{ 'X-CSRF-TOKEN' = $csrf.token }
 $me = Invoke-RestMethod -Uri "$base/me" -WebSession $browser
 $me | Select-Object id, email
 
+# All account ownership comes from this authenticated session.
+$accounts = 'https://localhost:7143/api/v1/accounts'
+$createdAccount = Invoke-RestMethod -Uri $accounts -Method Post -WebSession $browser -Headers $headers -ContentType 'application/json' -Body (@{ name = 'Demo cash'; currency = 'DOP' } | ConvertTo-Json)
+$accountUri = "$accounts/$($createdAccount.id)"
+$page = Invoke-RestMethod -Uri ($accounts + '?page=1&pageSize=20&status=Active&sort=name') -WebSession $browser
+$detail = Invoke-RestMethod -Uri $accountUri -WebSession $browser
+$renamed = Invoke-RestMethod -Uri $accountUri -Method Patch -WebSession $browser -Headers $headers -ContentType 'application/json' -Body (@{ name = 'Demo emergency fund' } | ConvertTo-Json)
+$archived = Invoke-RestMethod -Uri ($accountUri + '/archive') -Method Post -WebSession $browser -Headers $headers -ContentType 'application/json' -Body '{}'
+$archivedAgain = Invoke-RestMethod -Uri ($accountUri + '/archive') -Method Post -WebSession $browser -Headers $headers -ContentType 'application/json' -Body '{}'
+$archivedAgain | Select-Object id, name, currency, status
+
 Invoke-WebRequest -Uri "$base/logout" -Method Post -WebSession $browser -Headers $headers -UseBasicParsing | Out-Null
 $csrf = Invoke-RestMethod -Uri "$base/csrf" -WebSession $browser
 $password = $null
@@ -152,6 +165,26 @@ $securePassword.Dispose()
 ```
 
 A new browser session without cookies receives 401 from /me. Omitting the token header or sending an old token after an identity change produces 400. No certificate-validation bypass is needed. For cookie flags and rejected-token examples without persisted demo users, run the automated integration suite.
+
+## Account management
+
+All routes require a cookie-authenticated user. An anonymous account request returns 401; authenticated POST/PATCH requests require a valid X-CSRF-TOKEN and matching cookie. The registration/login/logout CSRF behavior is unchanged.
+
+| Endpoint | Input | Success |
+| --- | --- | --- |
+| POST /api/v1/accounts | JSON name and currency (DOP/USD) | 201 with DTO and Location |
+| GET /api/v1/accounts | Optional page/pageSize/status/sort | 200 with owned page |
+| GET /api/v1/accounts/{id} | Owned account identifier | 200 with DTO |
+| PATCH /api/v1/accounts/{id} | JSON name only | 200 with renamed DTO |
+| POST /api/v1/accounts/{id}/archive | No body or empty JSON object | 200 with archived DTO; repeat is idempotent |
+
+Account DTOs contain only id, name, currency, and status (Active/Archived). There is no balance or owner field. Names are trimmed and limited to 100 UTF-16 code units; currencies are normalized using the existing domain rules. Unknown JSON fields are rejected, including ownerId, userId, id, status, balances, and currency on rename. Currency and ownership cannot be changed.
+
+Every ID operation includes the authenticated owner in the SQL predicate. A foreign account and a missing account both produce 404 account_not_found, with no disclosure of the foreign account's state. Invalid names/currencies produce ValidationProblem 400; renaming an owned archived account produces 409 account_archived. No DELETE endpoint exists, and archiving retains the row.
+
+List defaults are page=1, pageSize=20, all states, and sort=name. Valid page range is 1–10000 and pageSize is 1–100. status accepts Active or Archived case-insensitively; sort accepts name or name_desc. Unknown/repeated query parameters are rejected. Other account routes accept no query parameters. A list response has items, page, pageSize, and owner/status-filtered totalCount.
+
+Ordering uses database collation for Name and ascending Id as the unique tie-breaker. Reads are AsNoTracking DTO projections. A conditional rename updates Name only while the stored account is still Active, preventing a stale snapshot from editing after archive. Active-account concurrent renames remain last-write-wins; count/page are separate reads, so offset pagination is not a snapshot under concurrent changes.
 
 ## Run locally over HTTPS
 
@@ -212,8 +245,8 @@ docs/
 | Project | Responsibility | Direct project references |
 | --- | --- | --- |
 | Domain | Money, Account, and their business invariants | None |
-| Application | Authentication DTOs, outcomes, and use-case port | Domain |
-| Infrastructure | SQL Server persistence and Identity-backed authentication use cases | Application, Domain |
+| Application | Authentication contracts and account use cases/DTOs/store port | Domain |
+| Infrastructure | SQL Server account adapter and Identity-backed authentication | Application, Domain |
 | Api | HTTP endpoints and composition root | Application, Infrastructure |
 | UnitTests | Isolated Money and Account behavior checks | Domain |
 | IntegrationTests | HTTP/configuration checks and opt-in real SQL tests | Api, Infrastructure |

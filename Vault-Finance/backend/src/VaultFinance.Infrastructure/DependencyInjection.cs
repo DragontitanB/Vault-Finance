@@ -8,6 +8,7 @@ using VaultFinance.Infrastructure.Identity;
 using VaultFinance.Infrastructure.Persistence;
 using VaultFinance.Application.Authentication;
 using Microsoft.AspNetCore.DataProtection;
+using VaultFinance.Application.Accounts;
 
 namespace VaultFinance.Infrastructure;
 
@@ -87,6 +88,7 @@ public static class DependencyInjection
         services.Configure<PasswordHasherOptions>(options => options.IterationCount = 210_000);
         services.AddSingleton<UnknownUserPasswordVerifier>();
         services.AddScoped<IAuthenticationService, IdentityAuthenticationService>();
+        services.AddScoped<IAccountStore, EfAccountStore>();
 
         return services;
     }

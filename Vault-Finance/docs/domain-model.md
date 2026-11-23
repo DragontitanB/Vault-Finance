@@ -2,7 +2,7 @@
 
 ## Status and conventions
 
-Money and Account are implemented in Domain without changes to their existing behavior. Infrastructure now persists Account and ASP.NET Core Identity users. Transaction, Category, Budget, Transfer, AuditEntry, and all financial use cases/endpoints remain future proposals.
+Money and Account are implemented in Domain without changes to their existing behavior. Infrastructure persists Account and Identity users. Application/API now support owned account creation, listing, detail, rename, and archive. Transaction, Category, Budget, Transfer, AuditEntry, balances, and all monetary operations remain future proposals.
 
 Account uses opaque, caller-supplied, non-empty Guid identifiers for Id and UserId. The entity does not generate identifiers or verify that a User exists. Proposed future event timestamps use UTC; transaction dates and budget months represent user-facing calendar concepts and need an explicit timezone policy before implementation.
 
@@ -28,7 +28,11 @@ The earlier proposal included a descriptive type, opening balance, and opening d
 
 The future balance will be derived from an opening balance, income, expenses, and transfer legs. Negative balances may be valid; overdraft rules are not assumed. Future writes must respect the archive state. Do not introduce a persisted balance cache until a demonstrated need and consistency strategy exist.
 
-The earlier one-reporting-currency-per-user proposal is superseded: one user may own multiple accounts in different currencies, DOP and USD. The Accounts.UserId foreign key enforces owner existence in persistence, with deletion restricted while accounts exist. Resource authorization is still a future application responsibility; a foreign key is not authorization.
+The earlier one-reporting-currency-per-user proposal is superseded: one user may own multiple accounts in different currencies, DOP and USD. The Accounts.UserId foreign key enforces owner existence in persistence, with deletion restricted while accounts exist. Account authorization is now enforced separately: the server supplies UserId from the authenticated identity, and every existing-resource query/update scopes by owner and Id. A foreign key alone is not authorization.
+
+Account HTTP input exposes only Name/Currency for creation and Name for rename. Unknown JSON fields are rejected, including ownership, identity, and status fields. Archive accepts no body or an empty object. Responses expose only Id, Name, Currency, and Status, without owner data or invented balances. Accounts remain queryable after archiving; rename returns a conflict for an owned archived account. Foreign/missing identifiers both produce 404.
+
+The existing Account class and EF mapping were sufficient: no setters, constructors, domain behavior, table columns, or migrations changed. The application invokes Account.Rename/Archive. Infrastructure applies a status-conditioned rename and an archive-only status update, so stale snapshots cannot rename after a committed archive or reactivate a row. Other concurrent active renames remain last-write-wins.
 
 EF explicitly maps the existing get-only properties and binds the existing constructor. It then restores persisted Status through its private setter. Reloading an archived account preserves its state and prohibition on renaming. Domain has no EF references, public setters, or new persistence constructor. EF also rejects changes to persisted UserId/Currency through the change tracker.
 

@@ -2,7 +2,7 @@
 
 ## Current structure
 
-Vault Finance is a modular monolith using Clean Architecture: one deployable API and inward-facing compile-time dependencies. Domain implements Money and Account. Application owns authentication contracts/outcomes and the IAuthenticationService port. Infrastructure implements the port through Identity alongside EF Core SQL Server persistence. API owns HTTP endpoints, ProblemDetails mapping, CSRF enforcement, and rate limiting. No financial endpoints are implemented.
+Vault Finance is a modular monolith using Clean Architecture: one deployable API and inward-facing compile-time dependencies. Domain implements Money and Account. Application owns authentication contracts and account use cases/contracts. Infrastructure implements Identity authentication and the account persistence port using EF Core SQL Server. API owns HTTP endpoints, ProblemDetails mapping, CSRF enforcement, and rate limiting. Account management is implemented; balances and monetary operations are not.
 
 | Layer | Responsibility | Allowed direct dependencies |
 | --- | --- | --- |
@@ -23,13 +23,29 @@ There are no dedicated module assemblies, module loading mechanisms, inter-modul
 
 Authentication routes are explicitly mapped under /api/v1/auth: register, login, logout, me, and csrf. No default Identity endpoint set is mapped. Application credential DTOs contain no framework types; Identity types and storage remain in Infrastructure. The Identity adapter is the implementation of these concrete use cases, rather than a generic repository or mediator layer.
 
+Account routes are grouped under /api/v1/accounts and require authorization at group level. AccountEndpoints obtains the non-empty Guid owner only from the authenticated NameIdentifier claim; handlers never bind a client owner identifier. Inputs and outputs are DTOs, never tracked/domain entities. Account request DTOs use the .NET JSON unmapped-member rule to reject extra fields such as ownerId, userId, status, currency on rename, and invented balances.
+
+AccountService in Application orchestrates the existing domain constructor, Rename, and Archive operations. IAccountStore is a narrow port for the actual owned-resource queries and updates. EfAccountStore implements it using EF; there is no generic repository, exposed IQueryable, new base class, mediator, or added package.
+
+Every existing-account read/update includes UserId and Id in its database predicate. A foreign account and a nonexistent account return the same 404 account_not_found. The DTO contains only Id, Name, Currency, and the Active/Archived state. Invalid input returns ValidationProblem 400; renaming an owned archived account returns 409 account_archived.
+
 Registration returns 201 without signing in. Login returns 200 and a secure non-persistent cookie. Logout returns 204 and removes the browser session. /me returns only Id/Email. An anonymous CSRF bootstrap supports registration/login protection; the token must be refreshed after identity transitions. No JWT is returned.
 
 The API uses minimal endpoints. GET /health calls a small typed handler and returns HTTP 200 with {"status":"ok"}. It is explicitly anonymous and short-circuits routing after HTTPS redirection, before authentication/authorization/antiforgery middleware. Even an attached authentication cookie must not trigger Identity stamp validation or a SQL query for health. No database checks or dependency readiness claims exist.
 
 HTTPS redirection is enabled. The local https launch profile binds ports 7143 and 5102 and selects Development. OpenAPI JSON is mapped only in Development at /openapi/v1.json; no documentation UI is installed.
 
-The explicit pipeline places rate limiting before authentication, then the global /api CSRF guard before authorization and framework antiforgery. All matched unsafe API methods require the configured header/cookie pair, including anonymous routes. ProblemDetails handles validation, authentication, conflict, CSRF, throttling, and unexpected errors without exposing internals. Authentication responses are no-store. Production HSTS is enabled, and current Kestrel request bodies are limited to 16 KiB.
+The explicit pipeline places rate limiting before authentication, then the global /api CSRF guard before authorization and framework antiforgery. For protected business endpoints outside /api/v1/auth, the guard challenges anonymous callers with 401 first. Authenticated mutations still require CSRF; the existing anonymous-auth-route CSRF contract is unchanged. ProblemDetails handles errors without exposing internals. API responses are no-cache/no-store. Production HSTS is enabled, and current Kestrel request bodies are limited to 16 KiB.
+
+## Account reads and writes
+
+List defaults to page=1, pageSize=20, all states, and sort=name. Page is bounded to 1–10000 and pageSize to 1–100. The optional status is Active or Archived (case-insensitive); sort is name or name_desc. Names are ordered using SQL Server collation, with Id ascending as a unique tie-breaker. Responses contain items, page, pageSize, and owner/status-filtered totalCount. Unknown/repeated query parameters are rejected; non-list account routes accept no query parameters.
+
+Reads use AsNoTracking and DTO projections. Mutation snapshots are detached domain objects: the application invokes domain behavior, then the adapter updates only the intended column. Rename uses one conditional ExecuteUpdate with owner, Id, and Active state in the WHERE clause, so a concurrent archive cannot be overwritten by an outdated active snapshot. Archive updates only Status to Archived and remains idempotent. No operation updates owner/currency or physically deletes a row.
+
+Active-account concurrent renames use last-write-wins; no ETag/version token is claimed. List count and page are separate read queries, not a point-in-time snapshot; concurrent changes may move offset page boundaries. These limits do not justify changing the existing schema for this iteration.
+
+References: [EF conditional updates and affected rows](https://learn.microsoft.com/en-us/ef/core/saving/execute-insert-update-delete) and [strict JSON unmapped-member handling](https://learn.microsoft.com/en-us/dotnet/standard/serialization/system-text-json/missing-members).
 
 ## Configuration
 
@@ -69,7 +85,7 @@ The script is deliberately limited to this initial schema, not a general product
 
 ## Deferred implementation
 
-Registration, cookie login/logout, current-user lookup, CSRF bootstrap/enforcement, Identity password policy, temporary lockout, and process-local rate limiting are implemented. Financial resource authorization/use cases, email confirmation/recovery/MFA, global session revocation, production Data Protection key storage, distributed abuse protection, concurrency controls, idempotency, audit persistence, React, and TypeScript remain deferred.
+Account creation, owned listing/detail, rename, and idempotent archive are implemented with owner-scoped authorization. Other financial resource use cases/authorization, email confirmation/recovery/MFA, global session revocation, production Data Protection key storage, distributed abuse protection, general optimistic concurrency/versioning, monetary idempotency, audit persistence, React, and TypeScript remain deferred.
 
 Use direct, explicit use-case composition first. Add a port only when a real application use case needs an external capability. Do not add generic repositories, speculative service layers, messaging infrastructure, caching, or mediator packages.
 

@@ -2,7 +2,7 @@
 
 ## Current implementation
 
-The API implements register, login, logout, current-user lookup, and CSRF bootstrap under /api/v1/auth, using ASP.NET Core Identity and cookie sessions. Domain and the applied InitialPersistence migration remain unchanged. Financial endpoints, resource authorization for financial data, idempotency, and auditing are not implemented.
+The API implements cookie authentication under /api/v1/auth and authenticated account management under /api/v1/accounts. Account access is owner-scoped in every query/update. Domain and the applied InitialPersistence migration remain unchanged. Balances, monetary workflows, their authorization/idempotency, and auditing are not implemented.
 
 The sections below distinguish current preparation from controls still required before implementing authenticated financial endpoints.
 
@@ -45,6 +45,8 @@ Login and logout delete the browser's antiforgery cookie so the next bootstrap r
 
 CsrfProtectionMiddleware explicitly validates every matched /api endpoint using a method other than GET, HEAD, OPTIONS, or TRACE. This includes anonymous register/login and authenticated logout, regardless of content type. Exactly one non-empty header is required; missing/invalid/mismatched tokens return ProblemDetails 400 invalid_csrf_token before handler execution. This enforces JSON protection independently of the framework's form-endpoint metadata.
 
+Protected business endpoints outside /api/v1/auth challenge anonymous callers with 401 before CSRF validation. This never executes a handler without identity. For authenticated account callers, create, patch, and archive all require CSRF. The existing registration/login/logout CSRF response ordering is preserved.
+
 For every future API mutation: keep the route under /api, retain the middleware, require authorization unless explicitly reviewed as public, and add tests for missing/invalid/valid tokens. DisableAntiforgery metadata does not bypass this manual guard. External webhook/service authentication would require a separately reviewed design, not a casual exemption. Safe GET handlers must not mutate business data.
 
 SameSite cookies and CORS are not substitutes for antiforgery validation. Missing or invalid tokens must fail before mutation. Prefer same-origin hosting; if cross-origin development is needed, configure an exact origin allowlist and credentials intentionally, never a wildcard credential policy.
@@ -55,7 +57,11 @@ See [Microsoft's antiforgery guidance](https://learn.microsoft.com/en-us/aspnet/
 
 Require authentication by default once protected endpoints exist, leaving only explicitly public endpoints anonymous. Obtain the owner identity from validated server-side claims, never a client-supplied UserId.
 
-Scope reads and writes to the owner. Check the ownership of related accounts, categories, budgets, transactions, and both sides of a transfer. A guessed identifier must not expose another user's data. Return consistent forbidden/not-found responses according to a documented disclosure policy.
+The accounts route group requires authorization. The API validates a non-empty Guid from the server-side NameIdentifier claim; no client field can select the owner. Application takes that server-supplied owner and the persistence adapter scopes every list, detail, rename, and archive query by it. Id-based operations additionally restrict by Id. Foreign resources and nonexistent resources return the identical 404 account_not_found contract, never 403 or an archive-state disclosure.
+
+Create/rename DTOs have only editable fields and disallow unknown JSON members. Archive permits an absent/empty JSON object and also rejects unknown fields. Supplying ownerId, userId, id, status, balances, or currency on rename is rejected instead of silently ignored. Supported query parameters are allowlisted and must not repeat. Responses contain only id/name/currency/status. The API never binds entities or copies request values into tracked objects.
+
+Rename and archive invoke the existing domain methods. SQL then updates only Name or Status with owner predicates; currency/ownership are not writable. Rename also requires Active in the SQL predicate, rejecting a concurrent archive. There is no deletion endpoint or physical-delete operation in the account port. Future category, budget, transaction, and transfer use cases still require explicit related-resource ownership checks; account protection does not automatically secure future resources.
 
 See [Microsoft's resource-based authorization guidance](https://learn.microsoft.com/en-us/aspnet/core/security/authorization/resource-based?view=aspnetcore-10.0).
 
@@ -96,5 +102,7 @@ API startup never creates or migrates databases. The initial migration script ch
 ## Planned verification
 
 Current tests cover registration, normalized duplicate rejection, password/email validation, successful and generic failed login, temporary lockout/recovery, minimal /me responses, browser logout, cookie flags, no-cache/CORS behavior, rate limiting, missing/invalid/cross-browser/old-identity CSRF tokens, and liveness without SQL. HTTP/Identity tests use real SQL Server through WebApplicationFactory, synthetic users/passwords, one transaction per test shared across request scopes, and rollback on disposal. Existing domain and persistence tests remain.
+
+Account tests add anonymous 401 on all five routes, authenticated creation/rename/archive, strict JSON input, name/currency validation, owner-only lists, foreign-ID reads/writes returning 404, archived edit rejection, idempotent archive, absent/invalid CSRF, pagination/filter/sort bounds, no-tracking reads, and rejection of stale active-snapshot renames after archive. Two independent cookie jars represent distinct owners inside each rollback-only SQL test.
 
 Future financial features still need cross-user resource tests, idempotency/concurrency tests, audit verification, and endpoint-specific authorization/CSRF checks. In-memory HTTP tests do not perform TLS negotiation; local HTTPS is checked separately without disabling certificate validation.

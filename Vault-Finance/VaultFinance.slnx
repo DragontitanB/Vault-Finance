@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/backend/" />
+  <Folder Name="/backend/src/">
+    <Project Path="backend/src/VaultFinance.Api/VaultFinance.Api.csproj" />
+    <Project Path="backend/src/VaultFinance.Application/VaultFinance.Application.csproj" />
+    <Project Path="backend/src/VaultFinance.Domain/VaultFinance.Domain.csproj" />
+    <Project Path="backend/src/VaultFinance.Infrastructure/VaultFinance.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/backend/tests/">
+    <Project Path="backend/tests/VaultFinance.IntegrationTests/VaultFinance.IntegrationTests.csproj" />
+    <Project Path="backend/tests/VaultFinance.UnitTests/VaultFinance.UnitTests.csproj" />
+  </Folder>
+</Solution>

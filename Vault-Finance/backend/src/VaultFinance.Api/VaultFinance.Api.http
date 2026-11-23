@@ -1,0 +1,9 @@
+@VaultFinance.Api_HostAddress = https://localhost:7143
+
+GET {{VaultFinance.Api_HostAddress}}/health
+Accept: application/json
+
+###
+
+GET {{VaultFinance.Api_HostAddress}}/openapi/v1.json
+Accept: application/json

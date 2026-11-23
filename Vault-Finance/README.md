@@ -4,13 +4,15 @@ Vault Finance is a personal finance portfolio project focused on .NET backend ar
 
 ## Current status
 
-The project provides a .NET 10 solution, Clean Architecture, immutable financial domain types, EF Core 10 SQL Server account/journal storage, and ASP.NET Core Identity stores with Guid keys. The API exposes process liveness and development-only OpenAPI. Application has no financial posting use cases yet.
+The project provides a .NET 10 solution, Clean Architecture, immutable financial domain types, EF Core 10 SQL Server account/journal storage, and ASP.NET Core Identity stores with Guid keys. The API exposes process liveness and development-only OpenAPI. Application now supports initial financial opening and owner-scoped derived-balance reads, without financial HTTP endpoints.
 
-The API implements registration, cookie login/logout, current-user lookup, CSRF bootstrap, and owner-scoped account creation/listing/detail/rename/archive. Identity owns password validation/hashing, normalization, and temporary lockout. Journal storage has an additive migration validated only in a dedicated test database. There is no financial writer, balance calculator, posting service, financial endpoint, budget, dashboard or frontend. Domain and the initial migration remain unchanged.
+The API implements registration, cookie login/logout, current-user lookup, CSRF bootstrap, and owner-scoped account creation/listing/detail/rename/archive. Identity owns password validation/hashing, normalization, and temporary lockout. Journal storage has an additive migration validated only in a dedicated test database. Initial opening now uses an atomic SQL writer with canonical idempotency, audit and owner-scoped derived-balance reads. There are no executable Income/Expense/Transfer/Reversal use cases, financial HTTP endpoints, budgets, dashboard or frontend. Domain and the initial migration remain unchanged.
 
 ADR-002 is Accepted. Financial amounts are positive and bounded by decimal(28,2), using DOP/USD. Confirmed descriptors have no mutation/confirmation-again API; reversal references the original without editing it. UTC recording metadata derives an America/Santo_Domingo effective date. Creating a descriptor does not prove funds, global reversal uniqueness or SQL commit. See the [financial engine contract](docs/financial-engine-design.md) and [domain usage examples](docs/domain-model.md).
 
-Current validation: restore succeeded; build had zero warnings/errors; all 126 unit and 176 integration cases passed, with zero skips. Of the integration cases, 24 configuration/safety and 43 real SQL cases are new. The new migration was applied only to the marked VaultFinanceJournalTests database. See [schema, constraints, SQL test safety and controlled migration commands](docs/financial-journal-persistence.md).
+Current validation: restore succeeded; build had zero warnings/errors; all 150 unit and 219 integration cases passed, with zero skips (369 total). The 302 prior cases are retained, with 24 new Application unit and 43 new real SQL cases. InitialFinancialWriter was applied only to the marked VaultFinanceJournalTests database; VaultFinanceDb still has InitialPersistence only. See [schema, constraints, SQL test safety and controlled migration commands](docs/financial-journal-persistence.md).
+
+See the [opening protocol, concurrency evidence, exact limits and commands](docs/financial-opening-writer.md).
 
 ## Prerequisites
 
@@ -31,7 +33,7 @@ dotnet build VaultFinance.slnx --no-restore
 dotnet test VaultFinance.slnx --no-build --no-restore
 ```
 
-Unit tests reference Domain directly and exercise Money, Account and financial primitives without API hosting or infrastructure. They cover validation, normalization, value equality, exact signed arithmetic, currency compatibility, decimal limits, renaming/archiving, operation shapes, recording dates, causal reversal references and immutability. Integration tests start the actual application through `WebApplicationFactory<Program>`, verify anonymous `GET /health` in Development and Production, and verify that OpenAPI is exposed only in Development. Their in-memory server uses an HTTPS request scheme but does not exercise certificate trust, TLS negotiation, or a real network socket.
+Unit tests reference Domain and Application, without API hosting or Infrastructure. They exercise domain invariants and opening validation/trusted-owner context through a narrow fake journal port. They cover validation, normalization, value equality, exact signed arithmetic, currency compatibility, decimal limits, renaming/archiving, operation shapes, recording dates, causal reversal references and immutability. Integration tests start the actual application through `WebApplicationFactory<Program>`, verify anonymous `GET /health` in Development and Production, and verify that OpenAPI is exposed only in Development. Their in-memory server uses an HTTPS request scheme but does not exercise certificate trust, TLS negotiation, or a real network socket.
 
 Set `$env:VAULTFINANCE_SQL_TESTS = '0'` for tests that do not require SQL. SQL facts/theories are explicitly skipped in that mode. The previous Domain-only run had 126 unit and 29 ordinary integration passes, plus 32 skipped SQL methods; enabling those theories expands their cases. The current full SQL-enabled result is reported above.
 
@@ -109,7 +111,7 @@ Authentication HTTP tests use WebApplicationFactory with the real SQL provider a
 
 The account suite uses two independent authenticated cookie jars per test against real SQL Server, with the same rollback isolation. It covers foreign-ID reads/writes, owner-only lists, strict DTOs, domain validation, archive idempotence, CSRF, paging, sorting, and a stale-snapshot rename after archive. The previous ownership/currency persistence assertion now includes the earlier EF alternate-key rejection.
 
-Historical account-management validation was 72 unit + 109 integration = 181 passes. The current result is 126 + 176 = 302 passes; the additional financial persistence cases establish schema/storage behavior, not financial writer correctness.
+Historical account-management validation was 72 unit + 109 integration = 181 passes. Journal persistence subsequently passed 302 cases. Current validation passes 369, including independent-session concurrent replay/conflict/duplicate prevention, least-privilege execution, lock-timeout retry and full rollback after a forced audit failure. Physical network-loss/native-deadlock fault injection and other financial writers remain outside this increment.
 
 ## Authentication and CSRF
 
@@ -249,6 +251,7 @@ docs/
   security.md
   financial-engine-design.md
   financial-journal-persistence.md
+  financial-opening-writer.md
   decisions/ADR-001-modular-monolith.md
   decisions/ADR-002-financial-operation-journal.md
 ```
@@ -256,13 +259,13 @@ docs/
 | Project | Responsibility | Direct project references |
 | --- | --- | --- |
 | Domain | Money, Account, immutable financial descriptors and local invariants | None |
-| Application | Authentication contracts and account use cases/DTOs/store port | Domain |
-| Infrastructure | SQL Server account/journal storage and Identity-backed authentication | Application, Domain |
+| Application | Authentication/account contracts, initial-opening and derived-balance use cases | Domain |
+| Infrastructure | SQL Server storage, transactional opening protocol and Identity | Application, Domain |
 | Api | HTTP endpoints and composition root | Application, Infrastructure |
-| UnitTests | Isolated domain behavior and financial descriptor checks | Domain |
+| UnitTests | Domain invariants and isolated opening Application behavior | Domain, Application |
 | IntegrationTests | HTTP/configuration checks and opt-in real SQL tests | Api, Infrastructure |
 
-UnitTests no longer references Api; the health HTTP contract remains covered by IntegrationTests. Tests for future application use cases should reference Application when its behavior exists.
+UnitTests references Domain and Application, without Api/Infrastructure. The health HTTP contract remains covered by IntegrationTests.
 
 ## Configuration and security
 
@@ -283,6 +286,7 @@ Data Protection uses application name VaultFinance and the Windows profile's nor
 - [ADR-001: Modular monolith](docs/decisions/ADR-001-modular-monolith.md)
 - [Accepted financial engine contracts and implementation increments](docs/financial-engine-design.md)
 - [Implemented journal schema, dedicated SQL tests and migration commands](docs/financial-journal-persistence.md)
+- [Transactional opening, canonical idempotency and derived-balance protocol](docs/financial-opening-writer.md)
 - [ADR-002: Immutable financial operation journal](docs/decisions/ADR-002-financial-operation-journal.md)
 
 Implementation references: [ASP.NET Core integration testing](https://learn.microsoft.com/en-us/aspnet/core/test/integration-tests?view=aspnetcore-10.0) and [OpenAPI document generation](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/openapi/aspnetcore-openapi?view=aspnetcore-10.0).

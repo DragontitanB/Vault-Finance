@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\VaultFinance.Domain\VaultFinance.Domain.csproj" />
+    <ProjectReference Include="..\..\src\VaultFinance.Application\VaultFinance.Application.csproj" />
   </ItemGroup>
 
 </Project>

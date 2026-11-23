@@ -1,8 +1,8 @@
 # Financial Engine Design
 
-Status: Accepted architecture; Domain primitives and journal persistence implemented. Updated: 2026-11-23.
+Status: Accepted architecture; Domain, journal persistence, initial opening and derived-balance reads implemented. Updated: 2026-11-23.
 
-Vault Finance records simulated personal-finance assertions, not bank funds, custody, settlement, or credit. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the accepted architecture. The [journal persistence increment](financial-journal-persistence.md) adds storage/schema verified in a dedicated SQL database. There is still no financial writer, balance calculator, correction coordinator, Application command or endpoint.
+Vault Finance records simulated personal-finance assertions, not bank funds, custody, settlement, or credit. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the accepted architecture. The [journal persistence increment](financial-journal-persistence.md) adds storage/schema verified in a dedicated SQL database. The [initial opening writer and derived-balance read](financial-opening-writer.md) are now implemented and verified only in the dedicated SQL database. Other financial commands, correction/transfer coordinators and financial HTTP endpoints remain unimplemented.
 
 ## 1. Review and resolved contradictions
 
@@ -37,7 +37,7 @@ Financial operation magnitudes satisfy 0 < amount <= 99999999999999999999999999.
 
 DOP/USD remain independent. Account/amount currencies must match; both transfer accounts must have the same owner/currency and distinct IDs. No FX or mixed-currency total is inferred.
 
-Recording instants are explicit UTC DateTimeOffset values with zero offset. America/Santo_Domingo determines EffectiveDate. The future writer captures one trusted SQL UTC instant after locks and shares it across the complete batch. No client-supplied recording/effective date, backdating, or scheduling is accepted, including opening initialization/correction.
+Recording instants are explicit UTC DateTimeOffset values with zero offset. America/Santo_Domingo determines EffectiveDate. The opening writer captures one trusted SQL UTC instant after locks and shares it across the complete batch; future command writers must preserve this rule. No client-supplied recording/effective date, backdating, or scheduling is accepted, including opening initialization/correction.
 
 Domain construction receives a deterministic instant rather than reading a wall clock. It cannot prove that the caller used the trusted current clock. The writer must also reject account-wide effective-date/clock regression against committed history.
 
@@ -123,13 +123,13 @@ A standalone reversal of the current opening must append the next zero revision 
 
 Archived accounts allow qualifying exact cancellation/reversal if the final balance stays nonnegative. A positive opening replacement requires Active status. No account reactivation is introduced.
 
-Domain contains positive Opening/Reversal descriptors. Infrastructure now stores opening-version metadata, including explicit zero revisions. No zero-initialization command, correction service or batch coordinator is implemented.
+Domain contains positive Opening/Reversal descriptors. Infrastructure now stores opening-version metadata, including explicit zero revisions. InitializeOpening now implements zero initialization and positive initialization through the controlled SQL protocol. Correction and general batch coordination remain future work.
 
 ## 8. Precision and mapping obligations
 
 decimal(28,2) has 26 integer digits and a coefficient that fits CLR decimal across the column range. This is an approved financial business bound, not a change to Money. Full-range generic Money must not silently be stored in a narrower column.
 
-Provider round trips for the maximum, trailing zeros and UTC/date facts are now proved against the dedicated SQL Server test database. SQL parameter conversion can round: reject 1.001 before binding, preserve insignificant zeros such as 1.2300, and never route values through float/double. The real SQL test explicitly demonstrates the raw-conversion limit; the future writer must retain early validation.
+Provider round trips for the maximum, trailing zeros and UTC/date facts are now proved against the dedicated SQL Server test database. SQL parameter conversion can round: reject 1.001 before binding, preserve insignificant zeros such as 1.2300, and never route values through float/double. The real SQL test explicitly demonstrates the raw-conversion limit; the opening protocol independently validates exact canonical wide-string amounts before narrowing; future writers must retain this protection.
 
 SUM(decimal) returns decimal(38, scale). Range-check the aggregate before conversion. Do not add unchecked decimal(38,2) aggregates: the result may need scale reduction. Cast validated bounded balances to decimal(28,2) before arithmetic; two operands produce decimal(29,2). Correction intermediates may be signed/wider but must retain scale 2 and satisfy the final bound.
 
@@ -185,7 +185,7 @@ Protocol:
 2. Begin READ COMMITTED transaction; acquire the owner/type/key transaction-owned lock and inspect any final outcome.
 3. Matching hash/version replays the original receipt; mismatch conflicts with no new batch.
 4. Resolve owned participants/original and lock account anchors sequentially in deterministic SQL-Guid-compatible order.
-5. Re-read status/currency/initialization (all ordinary participants must already be initialized), capture one trusted UTC instant and read fresh balances in a later statement.
+5. Re-read status/currency/initialization (all commands except initial opening require initialized participants), capture one trusted UTC instant and read fresh balances in a later statement.
 6. Validate revision, reversal eligibility, complete effects and final [0, Bmax] balances.
 7. Append batch/components/revision/result/audit and commit together. Rejections append only a final rejected result and audit.
 8. Return success after confirmed commit; resolve ambiguous commit with a fresh connection and the same owner/type/key.
@@ -230,22 +230,22 @@ Known limits remain no liabilities, FX, partial reversals, user backdating, gene
 
 Current domain tests cover bounded amounts, each kind, identifiers, ownership/currency/Active snapshots, immutable metadata, UTC/Santo Domingo boundaries, causal reversal references and forbidden mutable transitions. Prior tests are retained.
 
-Proved storage guarantees now include exact provider round trips, typed/scoped references, original-reversal uniqueness, owner/type/key uniqueness, append-only SQL behavior and migration/model alignment. Not yet proved: sufficient funds, initialization/current revision, complete batches, atomic opening replacement/transfer, operational idempotency, runtime SQL permissions or locking. Later writer tests require independent connections, actual commit boundaries and fault injection; sequential shared-transaction HTTP fixtures are insufficient.
+Proved storage guarantees now include exact provider round trips, typed/scoped references, original-reversal uniqueness, owner/type/key uniqueness, append-only SQL behavior and migration/model alignment. Initial opening now proves zero/positive initialization, same-scope concurrent replay/conflict, complete opening-batch rollback, derived-balance guards, native account/key locks and restricted-role execution. Not yet proved: outgoing sufficient-funds enforcement, correction/current replacement revision, transfer atomicity, physical lost-commit response/native deadlock fault injection, or runtime production-principal deployment. Later writer tests require independent connections, actual commit boundaries and fault injection; sequential shared-transaction HTTP fixtures are insufficient.
 
 | Increment | Exit evidence |
 | --- | --- |
 | 1: pure Domain, implemented | Local factories/value objects and immutability; no balance/correction service |
-| 2: isolated SQL feasibility, storage verified | Exact decimal/date materialization and independent connections; runtime least-privilege writer roles still deferred |
+| 2: isolated SQL feasibility, verified | Exact decimal/date materialization, independent connections and opening-role execution; production principal deployment still deferred |
 | 3: additive schema/projection, implemented | Ownership keys, revision chains, positive amounts, one reversal and batch metadata; dedicated test database only |
-| 4: controlled writer | Atomic outcomes/audit, scoped replay, locks and no partial batches |
-| 5: openings/corrections | Zero metadata, expected revisions, replacement/net-balance rollback |
+| 4: controlled writer, opening implemented | Atomic opening outcomes/audit, canonical replay, locks and no partial opening batches |
+| 5: opening implemented; correction deferred | Zero/positive initialization and derived balance verified; replacement/expected-revision correction remains future |
 | 6: income/expense/transfer/reversal | Overspending races, conservation and archived exception |
 | 7: HTTP/reconciliation | Cookie/CSRF/BOLA, consistent reads, diagnosis and fault injection |
 
-ADR acceptance closes architecture decisions, not unimplemented writer guarantees. This persistence increment authorizes additive schema/mapping and dedicated SQL validation, but no development database application or financial command/endpoint. /health remains independent of SQL.
+ADR acceptance closes architecture decisions, not unimplemented writer guarantees. The opening increment adds its Application cases and procedure/role migration, validated only in the marked existing test database. Development database application and financial HTTP endpoints remain excluded. /health remains independent of SQL.
 
 Current validation runs restore/build and the complete SQL-enabled suite against the separate marked database. No tests use the development database for destructive operations or cleanup.
 
-Historical increment-1 validation: 126 unit and 29 ordinary integration tests passed; 32 opt-in SQL methods were skipped. Current persistence validation: restore/build succeeded with zero warnings/errors; 126 unit and 176 integration cases passed, with zero skips. The dedicated migration is applied; the development migration is not. See the persistence document for count expansion, initial failures and exact limits.
+Historical increment-1 validation: 126 unit and 29 ordinary integration tests passed; 32 opt-in SQL methods were skipped. Historical persistence validation passed 302 cases. Current opening validation passes 150 unit and 219 integration cases (369 total), with zero skips and zero build warnings/errors. The [opening contract](financial-opening-writer.md) documents the canonical encoding, lock duration, retry/commit ambiguity, role limits and fault evidence. The dedicated migration is applied; the development migration is not. See the persistence document for count expansion, initial failures and exact limits.
 
 References: [SQL locks](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide?view=sql-server-ver15), [application locks](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sp-getapplock-transact-sql?view=sql-server-ver15), [EF transactions](https://learn.microsoft.com/en-us/ef/core/saving/transactions), [commit ambiguity](https://learn.microsoft.com/en-us/ef/core/miscellaneous/connection-resiliency).

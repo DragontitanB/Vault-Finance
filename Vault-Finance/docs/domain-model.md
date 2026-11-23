@@ -2,7 +2,7 @@
 
 ## Status and conventions
 
-Money, Account and the immutable financial Domain types retain their existing behavior. Infrastructure maps Account, Identity users and dedicated financial journal records; Domain entities gain no ORM dependencies, setters or persistence constructors. Application/API support owned account creation, listing, detail, rename, and archive. Category, Budget, balances, financial posting/auditing workflows and financial endpoints remain future work. See the [journal storage model](financial-journal-persistence.md).
+Money, Account and the immutable financial Domain types retain their existing behavior. Infrastructure maps Account, Identity users and dedicated financial journal records; Domain entities gain no ORM dependencies, setters or persistence constructors. Application/API support owned account creation, listing, detail, rename, and archive. Initial zero/positive opening, derived-balance reads and their idempotency/audit now execute through the controlled SQL boundary. Category, Budget, other financial command workflows and financial HTTP endpoints remain future work. See the [journal storage model](financial-journal-persistence.md).
 
 Account uses opaque, caller-supplied, non-empty Guid identifiers for Id and UserId. The entity does not generate identifiers or verify that a User exists. Financial timestamps are UTC with America/Santo_Domingo accounting dates. The future trusted writer selects current timestamps; users cannot backdate operations in the MVP.
 
@@ -24,9 +24,9 @@ Implemented as a sealed entity in `VaultFinance.Domain.Accounts`. Its current co
 - Archive changes Active to Archived while preserving the remaining data. Archiving an already archived account is an idempotent no-op. There is no reactivation operation.
 - Invalid creation or business changes throw DomainException with an explicit message.
 
-The earlier proposal included a descriptive type, opening balance, and opening date. These remain deferred to respect the current scope. There are no deposits, withdrawals, transfers, mutable balances, persistence constructors, or ORM dependencies.
+The descriptive account type remains deferred. Opening values/dates now belong to journal batches/revisions through the separate opening use case, not mutable Account properties. There are no deposits, withdrawals, transfers, mutable balances, persistence constructors, or ORM dependencies.
 
-The future balance derives from complete committed journal batches, including openings, income, expenses, transfers and exact compensations. Negative balances and credit accounts are forbidden. Ordinary activity requires Active accounts; the controlled reversal exception for archived accounts must also preserve nonnegative balances. There is no persisted balance cache.
+The current derived-balance read uses complete committed journal batches, including openings, income, expenses, transfers and exact compensations. Negative balances and credit accounts are forbidden. Ordinary activity requires Active accounts; the controlled reversal exception for archived accounts must also preserve nonnegative balances. There is no persisted balance cache.
 
 The earlier one-reporting-currency-per-user proposal is superseded: one user may own multiple accounts in different currencies, DOP and USD. The Accounts.UserId foreign key enforces owner existence in persistence, with deletion restricted while accounts exist. Account authorization is now enforced separately: the server supplies UserId from the authenticated identity, and every existing-resource query/update scopes by owner and Id. A foreign key alone is not authorization.
 
@@ -99,7 +99,7 @@ Currency validation is shared through an internal CurrencyCode helper, so Accoun
 
 Zero initialization is future audited opening-version metadata, not a zero monetary operation. Opening correction will append a full reversal and positive replacement (when needed) in one atomic batch and advance the opening revision.
 
-Infrastructure now stores opening versions, operations, batches, outcomes and audit, with typed FKs, scoped uniqueness and append-only guards. There is no additional Domain opening-version entity, balance calculator, funds check, operational replay, transfer/correction coordinator or financial API. Initialization, current owner/status, funds and indivisible confirmation remain the future controlled writer's responsibility.
+Infrastructure now stores opening versions, operations, batches, outcomes and audit, with typed FKs, scoped uniqueness and append-only guards. There is no additional Domain opening-version entity or mutable balance. Application/Infrastructure now implement initial opening, canonical replay and locked derived reads with complete-batch validation. Outgoing funds checks, transfer/correction coordination and financial HTTP endpoints remain future work. See the [opening contract](financial-opening-writer.md).
 
 ```csharp
 using VaultFinance.Domain.FinancialOperations;
@@ -141,4 +141,4 @@ Adding `new Money(1m, "DOP")` to `original` throws DomainException. Creating `ne
 
 ## Persistence and concurrency decisions still required
 
-Account and financial journal mappings, constraints, bounded decimal/date round trips and the new additive migration are implemented and tested on a dedicated SQL database. InitialPersistence is unchanged. The controlled writer, locks, balance queries and operational idempotency remain future work under ADR-002. Domain has no framework/project dependencies. Existing account use cases authorize ownership; financial descriptor checks do not replace future resource authorization or locked SQL revalidation.
+Account and financial journal mappings, constraints, bounded decimal/date round trips and the new additive migration are implemented and tested on a dedicated SQL database. InitialPersistence is unchanged. The initial-opening writer, account/key locks, balance queries and scoped replay are now verified under ADR-002. Other command writers and their funds/conservation/correction invariants remain future work. Domain has no framework/project dependencies. Existing account use cases authorize ownership; financial descriptor checks do not replace future resource authorization or locked SQL revalidation.

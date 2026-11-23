@@ -2,9 +2,9 @@
 
 ## Current structure
 
-Vault Finance is a modular monolith using Clean Architecture: one deployable API and inward-facing compile-time dependencies. Domain implements Money, Account and immutable financial operation primitives. Application owns authentication contracts and account use cases/contracts. Infrastructure implements Identity authentication, the account persistence port and financial journal storage using EF Core SQL Server. API owns HTTP endpoints, ProblemDetails mapping, CSRF enforcement, and rate limiting. Financial posting and balances are not implemented.
+Vault Finance is a modular monolith using Clean Architecture: one deployable API and inward-facing compile-time dependencies. Domain implements Money, Account and immutable financial operation primitives. Application owns authentication contracts and account use cases/contracts. Infrastructure implements Identity authentication, the account persistence port and financial journal storage using EF Core SQL Server. API owns HTTP endpoints, ProblemDetails mapping, CSRF enforcement, and rate limiting. Initial financial opening and derived-balance reads now use the controlled SQL protocol; other financial posting cases and financial HTTP endpoints remain unimplemented.
 
-[ADR-002](decisions/ADR-002-financial-operation-journal.md) accepts the immutable journal and [derived balance/writer contract](financial-engine-design.md). The [persistence increment](financial-journal-persistence.md) maps Infrastructure-owned records, preserving Domain and stored historical dates. SQL uniqueness covers original reversal references and owner/type/key scopes; the future writer must enforce funds, complete batches, atomic correction/transfer and operational idempotency. There are no financial Application use cases or HTTP endpoints.
+[ADR-002](decisions/ADR-002-financial-operation-journal.md) accepts the immutable journal and [derived balance/writer contract](financial-engine-design.md). The [persistence increment](financial-journal-persistence.md) maps Infrastructure-owned records, preserving Domain and stored historical dates. SQL uniqueness covers original reversal references and owner/type/key scopes; the initial-opening writer now enforces initialization, complete opening batches, canonical replay and locked derived reads. Future outgoing/correction/transfer writers must extend these guarantees. Application now exposes initial opening and balance reads through IFinancialJournal; no financial HTTP endpoint is mapped. See the [opening protocol](financial-opening-writer.md).
 
 | Layer | Responsibility | Allowed direct dependencies |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ Production hosting, host allowlists, certificates, reverse proxy trust, exceptio
 
 ## Testing
 
-UnitTests references Domain directly, with no Api or Infrastructure project reference. Tests cover Money construction, normalization, precision, value equality, signed arithmetic, incompatible currencies, overflow, and exactness at decimal boundaries. Account tests cover valid creation, identifiers, name and currency validation, safe renaming, archive transitions, and rejection of edits after archiving. The original handler unit test was replaced by domain tests; the existing HTTP integration tests still protect the health contract.
+UnitTests references Domain and Application, with no Api or Infrastructure project reference. Tests cover Money construction, normalization, precision, value equality, signed arithmetic, incompatible currencies, overflow, and exactness at decimal boundaries. Account tests cover valid creation, identifiers, name and currency validation, safe renaming, archive transitions, and rejection of edits after archiving. The original handler unit test was replaced by domain tests; the existing HTTP integration tests still protect the health contract.
 
 IntegrationTests references Api, Infrastructure, and Microsoft.AspNetCore.Mvc.Testing. Existing WebApplicationFactory tests remain unchanged. Additional tests verify mappings, secure cookie/antiforgery options, database target validation, and health without DefaultConnection. These configuration/HTTP tests do not require SQL Server.
 
@@ -91,7 +91,7 @@ FinancialJournalPersistence (20261123215517) is additive and forward-only. Its r
 
 ## Deferred implementation
 
-Account creation, owned listing/detail, rename, and idempotent archive are implemented with owner-scoped authorization. Other financial resource use cases/authorization, email confirmation/recovery/MFA, global session revocation, production Data Protection key storage, distributed abuse protection, general optimistic concurrency/versioning, operational monetary idempotency/auditing, React, and TypeScript remain deferred. Outcome/audit storage exists; execution, replay and financial audit production do not.
+Account creation, owned listing/detail, rename, and idempotent archive are implemented with owner-scoped authorization. Other financial resource use cases/authorization, email confirmation/recovery/MFA, global session revocation, production Data Protection key storage, distributed abuse protection, general optimistic concurrency/versioning, operational monetary idempotency/auditing, React, and TypeScript remain deferred. Opening execution/replay/audit and derived reads are implemented; other financial command execution remains deferred.
 
 Use direct, explicit use-case composition first. Add a port only when a real application use case needs an external capability. Do not add generic repositories, speculative service layers, messaging infrastructure, caching, or mediator packages.
 

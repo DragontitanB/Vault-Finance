@@ -1,8 +1,8 @@
 # Financial Journal Persistence
 
-Status: implemented schema and storage mappings; financial writer and HTTP use cases remain unimplemented.
+Status: journal storage implemented. The subsequent [initial-opening writer](financial-opening-writer.md) adds opening/read use cases; financial HTTP endpoints remain unimplemented.
 
-The accepted policy is [ADR-002](decisions/ADR-002-financial-operation-journal.md). This increment implements relational storage for simulated financial history. It does not execute financial commands, calculate balances, check funds, or expose financial endpoints.
+The accepted policy is [ADR-002](decisions/ADR-002-financial-operation-journal.md). This increment implements relational storage for simulated financial history. The storage increment itself executes no financial commands. The subsequent opening increment adds its controlled writer and derived-balance read, without outgoing financial commands or HTTP endpoints.
 
 ## Review and mapping decision
 
@@ -54,7 +54,7 @@ The operation CHECK requires an ordinary magnitude greater than zero. Reversals 
 
 SQL conversion to scale 2 can round before CHECK evaluation. A real test demonstrates that a raw INSERT of 1.001 can become 1.00. This is not a safe command boundary. DbContext validates added financial magnitudes through Money/FinancialAmount before binding parameters; the future writer must reject excess meaningful precision at its own input boundary too.
 
-Idempotency keys are case-sensitive varchar(128), with a binary collation, 1-128 ASCII letters/digits/hyphen/underscore. Fingerprints are char(64) uppercase hexadecimal SHA-256 representations with a positive encoding version. Added outcomes validate key/fingerprint characters and lengths before varchar/char conversion can lose information. SQL CHECKs independently reject malformed stored representations. No fingerprint calculation, canonicalization, payload comparison or replay is implemented yet.
+Idempotency keys are case-sensitive varchar(128), with a binary collation, 1-128 ASCII letters/digits/hyphen/underscore. Fingerprints are char(64) uppercase hexadecimal SHA-256 representations with a positive encoding version. Added outcomes validate key/fingerprint characters and lengths before varchar/char conversion can lose information. SQL CHECKs independently reject malformed stored representations. The subsequent opening procedure implements canonical fingerprint calculation/version comparison/replay; the storage records alone do not.
 
 Receipts are Unicode JSON, at most 16,384 UTF-16 code units; audit summaries are Unicode JSON, at most 4,096. Codes/actions are bounded ASCII tokens. These fields must contain approved server-produced summaries, not credentials or unrestricted request bodies.
 
@@ -73,11 +73,11 @@ Receipts are Unicode JSON, at most 16,384 UTF-16 code units; audit summaries are
 
 ## Immutable history and explicit limits
 
-All five tables have INSTEAD OF UPDATE, DELETE triggers raising SQL error 51001. DbContext separately rejects tracked modifications/deletions and configures after-save properties to throw. SQL OUTPUT is disabled for these mapped tables to support their triggers. Inserts remain possible for migration/test administrators; no financial runtime writer role is created.
+All five tables have INSTEAD OF UPDATE, DELETE triggers raising SQL error 51001. DbContext separately rejects tracked modifications/deletions and configures after-save properties to throw. SQL OUTPUT is disabled for these mapped tables to support their triggers. Inserts remain possible for migration/test administrators; the original storage migration created no runtime role. InitialFinancialWriter now adds an EXECUTE-only opening/read role with explicit direct-history denials.
 
 These safeguards are not tamper evidence against a sysadmin or a principal allowed to disable triggers/change schema. Least-privilege execution grants and the single permitted INSERT protocol belong to the future writer increment.
 
-The schema does not prove:
+The schema alone does not prove the following. Initial opening now implements the applicable writer/read checks; other commands and production deployment remain deferred. See financial-opening-writer.md for exact evidence and residual limits:
 
 | Pending guarantee | Required later boundary |
 | --- | --- |
@@ -154,7 +154,7 @@ Only a verified owned test database is migrated. No database is ever dropped/res
 
 Authentication/account HTTP tests continue to use their existing per-test shared SQL transaction and rollback. They do not establish inter-request financial concurrency guarantees.
 
-## Results and previous count diagnosis
+## Historical storage-increment results and previous count diagnosis
 
 - Restore succeeded; build completed with zero warnings/errors.
 - All 126 existing Domain unit cases passed unchanged.
@@ -162,7 +162,7 @@ Authentication/account HTTP tests continue to use their existing per-test shared
 - Total: 302 passed, 0 failed, 0 skipped in the SQL-enabled final run.
 - Dedicated migration history contains InitialPersistence and FinancialJournalPersistence; EF reports no pending model changes or test-database migrations.
 - A separate read-only review confirms VaultFinanceDb still has InitialPersistence only and none of the five financial tables.
-- No financial runtime command, endpoint, writer, balance or overdraft check was implemented or tested.
+- That storage-only increment implemented no financial command/endpoint/writer/balance. The subsequent opening increment retains all 302 cases and adds 24 Application unit plus 43 real SQL cases, totaling 369 passes; see the opening document.
 
 The earlier 32 skips were opt-in facts/theories disabled by VAULTFINANCE_SQL_TESTS, not failed SQL tests. Disabled theories count as skipped methods; enabling them expands their inline cases, yielding 80 SQL cases plus 29 ordinary integrations = 109. The historical 181 was 72 unit + 109 integration. Domain increment 1 increased unit cases to 126 while SQL remained disabled. The current increment restores the SQL suite on a separate test database and adds 67 integration cases.
 

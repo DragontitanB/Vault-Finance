@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-23
-- Scope: Accepted MVP architecture; Domain and journal storage implemented, financial writer still deferred
+- Scope: Accepted MVP architecture; Domain, journal storage and initial-opening writer implemented; other financial writers deferred
 - Contract: [Financial Engine Design](../financial-engine-design.md)
 
 ## Decision
@@ -27,7 +27,7 @@ Confirmed operations cannot be edited/deleted. There is no mutable reversed flag
 - Retain keys/fingerprints/results and audit for the MVP lifetime.
 - All financial writes use one permission-hardened transactional writer; runtime direct financial DML is not an alternative.
 
-These are closed architecture decisions. Provider mappings and schema constraints are now implemented and tested in a dedicated SQL database. The posting procedure, runtime roles, financial atomicity and native writer concurrency still require subsequent implementation/evidence.
+These are closed architecture decisions. Provider mappings and schema constraints are now implemented and tested in a dedicated SQL database. The initial-opening procedure, restricted-role execution, atomic opening rollback, canonical replay and independent-session concurrency are now implemented/tested. Other command writers, production principal deployment and physical network/native-deadlock fault injection still require subsequent work.
 
 ## Future SQL guarantees
 
@@ -45,13 +45,19 @@ Domain implements FinancialAmount, immutable FinancialPostingContext, kind/statu
 
 Validate positive/range/precision/currency, IDs, account snapshots, UTC/calendar metadata and local reversal causality. Creating a reversal never mutates its original or proves global uniqueness.
 
-Domain remains independent of data access and frameworks. There is no balance calculator, posting/correction/transfer coordinator or financial endpoint.
+Domain remains independent of data access and frameworks. Initial opening and a locked derived-balance read now execute through Application/Infrastructure without changing Domain. Correction/transfer coordinators and financial HTTP endpoints remain absent.
 
 ## Persistence increment
 
 Infrastructure maps dedicated storage records without changing Domain. The additive FinancialJournalPersistence migration creates batches, operations, opening versions, outcomes and audit, plus a read-only effects view and append-only triggers. It adds only the necessary Accounts owner/currency key and leaves Identity/InitialPersistence unchanged.
 
 The migration is validated only in the marked VaultFinanceJournalTests database. SQL uniqueness protects original-reversal and owner/type/key scopes; it does not perform funds checks, payload replay or complete-batch confirmation. Cross-row lifecycle/calendar/correction checks and least-privilege INSERT permissions remain writer obligations. See the [persistence contract and evidence](../financial-journal-persistence.md). ADR status remains Accepted.
+
+## Initial-opening writer increment
+
+The [opening protocol](../financial-opening-writer.md) implements zero/positive initialization, owner-scoped derived reads, SQL-canonical SHA-256 fingerprints, scoped request locks, deterministic account locks and complete outcome/audit commit. Stable business rejections store only outcome/audit; pre-commit technical failures roll back all rows. Response loss after commit is resolved by the same key, with an explicit unknown outcome when bounded recovery cannot establish a result.
+
+InitialFinancialWriter adds four procedures and one restricted role, without changing tables or previously applied migrations. It is applied only to the existing marked test database. The runtime role is tested under a non-owner principal; development administrators retain privileges and are outside that guarantee. Income/Expense/Transfer/Reversal and opening correction remain non-executable.
 
 ## Alternatives and consequences
 

@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\VaultFinance.Api\VaultFinance.Api.csproj" />
+    <ProjectReference Include="..\..\src\VaultFinance.Infrastructure\VaultFinance.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

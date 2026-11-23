@@ -2,21 +2,21 @@
 
 ## Current implementation
 
-The API provides only an anonymous process liveness endpoint, HTTPS redirection, a development HTTPS launch profile, and development-only OpenAPI JSON. Domain now validates Money and Account invariants, but these types are not exposed through financial endpoints. No Identity registration, authentication, session cookies, antiforgery validation, resource authorization, financial HTTP request validation, idempotency, or auditing is implemented. Immutable UserId on Account is a domain invariant, not proof of authenticated ownership or a substitute for authorization.
+The API exposes only anonymous process liveness and development-only OpenAPI, with HTTPS redirection. Infrastructure now registers Identity EF stores with Guid keys, secure application-cookie options, antiforgery services, and authentication/authorization/antiforgery middleware. There are no registration, login, logout, token-issuance, or financial routes. No cookies or request tokens are issued by an application endpoint. Resource authorization, financial HTTP request validation, idempotency, and auditing are not implemented. Immutable UserId and a database foreign key are not proof of authenticated ownership.
 
-The following sections define planned controls for later iterations. They are not claims of existing protection.
+The sections below distinguish current preparation from controls still required before implementing authenticated financial endpoints.
 
 ## Identity and secure sessions
 
-Use ASP.NET Core Identity through Infrastructure for password hashing, account lifecycle, lockout, and session management. Do not implement custom password hashing or expose identity persistence types as domain entities.
+ApplicationUser derives from IdentityUser<Guid> in Infrastructure, with official Identity EF stores. UserManager, SignInManager, and default token providers are registered; no flow uses them through an HTTP route yet. Do not implement custom password hashing or expose identity persistence types as domain entities.
 
-Use server-managed cookie authentication for the future first-party browser client. Authentication cookies will be HttpOnly, Secure, narrowly scoped, and have an explicit SameSite policy, bounded lifetime, and session revocation behavior. Start from a same-origin deployment with SameSite=Lax; revisit deliberately if topology changes. Do not place session credentials in browser local storage.
+The application cookie is configured as __Host-VaultFinance with Path=/, no Domain, HttpOnly, SecurePolicy.Always, SameSite=Lax, and a 30-minute sliding lifetime. Redirect events return 401/403 instead of HTML login redirects. These settings prepare the future same-origin browser client; routes do not yet issue sessions. Session recovery, revocation, lockout policy, rate limits, and lifecycle behavior require review and tests before exposure. Do not place credentials in browser local storage.
 
 Future API authentication failures should return appropriate 401/403 responses. Rate limits, password policy, recovery, email verification, and session lifecycle tests must be decided before exposing authentication to real users.
 
 ## CSRF and browser boundaries
 
-Cookie-authenticated state-changing requests require ASP.NET Core antiforgery token validation. The browser will obtain a request token through a deliberate flow and return it in a custom header. The session cookie remains HttpOnly. Safe GET endpoints must have no state-changing effects.
+Antiforgery is configured with header X-CSRF-TOKEN and a __Host-VaultFinance.Antiforgery cookie using HttpOnly, SecurePolicy.Always, Path=/, and SameSite=Strict. Middleware is installed, but there is no request-token endpoint or state-changing application route. Middleware registration alone does not require antiforgery validation on every future JSON endpoint: those endpoints must explicitly validate tokens or carry the appropriate endpoint metadata. Safe GET endpoints must have no state-changing effects.
 
 SameSite cookies and CORS are not substitutes for antiforgery validation. Missing or invalid tokens must fail before mutation. Prefer same-origin hosting; if cross-origin development is needed, configure an exact origin allowlist and credentials intentionally, never a wildcard credential policy.
 
@@ -40,7 +40,7 @@ Future cookie and antiforgery configuration must explicitly require secure trans
 
 Validate request types, required fields, lengths, enum values, dates, currency, precision, and amounts at appropriate boundaries. Enforce business invariants inside application/domain behavior. Use request contracts that accept only editable fields to prevent overposting.
 
-Use parameterized EF Core queries when persistence arrives and avoid SQL string concatenation. Return consistent problem responses without stack traces, SQL details, tokens, or secrets. Add request size limits and cancellation handling when relevant endpoints exist.
+EF Core SQL Server persistence uses parameterized operations. Sensitive-data logging is not enabled. Account CHECK constraints and the ownership foreign key complement domain validation. Return consistent problem responses without stack traces, SQL details, tokens, or secrets when use cases arrive. Add request size limits and cancellation handling when relevant endpoints exist.
 
 ## Idempotency and concurrency
 
@@ -54,7 +54,11 @@ Use explicit database transactions for multi-write operations and choose optimis
 
 Record relevant financial and security events with actor, resource, action, UTC time, and correlation identifier. Business audit entries commit with the financial write. Minimize stored details and protect access; define retention and erasure policies before persisting personal data.
 
-Never log passwords, authentication cookies, antiforgery tokens, connection strings, or full financial request bodies. Production credentials will come from environment configuration or a secret store, with least-privilege database access. Developer User Secrets may be configured explicitly later. No real secrets or connection strings belong in tracked files.
+Never log passwords, authentication cookies, antiforgery tokens, connection strings, or full financial request bodies. DefaultConnection currently comes from the API's existing User Secrets or environment configuration. User Secrets is a local development convenience, not an encrypted production vault. No real connection string is stored in the repository or supplied as a CLI argument. Production credentials require a secret store/environment configuration and least-privilege database access.
+
+ASP.NET Core Data Protection currently uses the normal Windows user-profile key repository protected by DPAPI. Run local hosting under the same Windows identity; an isolated process cannot necessarily decrypt that user's keys. Do not delete keys or switch to ephemeral keys to mask that failure. Production needs an explicit durable key repository, encryption/access controls, application isolation, and a rotation/recovery policy before sessions are enabled.
+
+API startup never creates or migrates databases. The initial migration script checks for existing data and foreign tables, restricts writes to local VaultFinanceDb, and performs no destructive cleanup. SQL tests use synthetic identities and rollback-only transactions; they never drop databases or delete existing records.
 
 ## Planned verification
 

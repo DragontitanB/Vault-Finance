@@ -25,7 +25,16 @@ The first iteration did not implement the future MVP below. The following domain
 
 This is domain behavior only. Account opening balances, opening dates, descriptive types, persistence, resource authorization, and all financial workflows remain deferred. The name limit is measured in UTF-16 code units, as detailed in the domain model.
 
-## Proposed MVP: future work
+## Iteration 3: implemented persistence and identity foundation
+
+- Official stable EF Core/SQL Server/Identity packages at 10.0.15, targeting SQL Server 2019 compatibility 150.
+- Infrastructure-owned Identity user and DbContext with Guid keys; Account mapping and ownership foreign key without domain changes.
+- Multiple accounts and DOP/USD currencies per user, replacing the original single-currency proposal.
+- Secure application-cookie and antiforgery preparation without authentication or financial routes.
+- Initial migration, conservative local preflight/apply script, and opt-in real SQL tests with rollback-only synthetic data.
+- No automatic startup migration, balance columns, financial workflows, or frontend.
+
+## Proposed MVP: remaining work
 
 1. Personal identity: register, log in, and log out through ASP.NET Core Identity and secure cookie sessions.
 2. Accounts: create and rename owned accounts, record an opening balance, and archive accounts without losing history.
@@ -35,9 +44,9 @@ This is domain behavior only. Account opening balances, opening dates, descripti
 6. Budgets: set monthly spending limits per expense category and report actual spending against those limits.
 7. Summary: expose basic balances, income, expense, and budget totals through the backend. A React and TypeScript dashboard will consume these endpoints in a later iteration.
 8. Accountability: audit relevant changes and protect retryable financial write operations with idempotency.
-9. Persistence: introduce EF Core 10, SQL Server, schema migrations, and database-backed integration tests when the relevant use cases are implemented.
+9. Persistence: extend the implemented EF Core/SQL Server schema and database-backed integration tests as financial use cases arrive.
 
-The initial MVP proposes one reporting currency per user. All their accounts, transactions, transfers, and budgets must use that currency. Money and Account currently support DOP and USD, with two effective decimal places for Money. User currency selection and enforcement across their accounts remain future application responsibilities; an Account alone cannot enforce that policy. SQL precision and persistence limits will be decided with persistence.
+One user may own accounts in different currencies: DOP and USD. This supersedes the original single-reporting-currency proposal. Future transactions must use their account's currency; transfers require equal currencies. Summaries and budgets must keep currencies separate without implicit conversion. Money retains two effective decimal places and its existing decimal range; monetary-property SQL precision is deferred because no persistent property currently uses Money.
 
 ## Quality requirements
 
@@ -51,7 +60,7 @@ The initial MVP proposes one reporting currency per user. All their accounts, tr
 
 ## Outside the MVP
 
-Bank synchronization, payment execution, investment portfolios, loans, tax calculations, multiple reporting currencies, exchange rates, cross-currency transfers, recurring transaction automation, shared accounts, organizations, social features, native mobile clients, and external notification integrations are excluded.
+Bank synchronization, payment execution, investment portfolios, loans, tax calculations, currency-converted consolidated reporting, exchange rates, cross-currency transfers, recurring transaction automation, shared accounts, organizations, social features, native mobile clients, and external notification integrations are excluded.
 
 Microservices, RabbitMQ, Redis, MediatR, generic repositories, and speculative abstractions are not part of the initial architecture.
 

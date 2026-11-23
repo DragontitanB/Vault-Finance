@@ -4,9 +4,9 @@ Vault Finance is a personal finance portfolio project focused on .NET backend ar
 
 ## Current status
 
-This first iteration provides a .NET 10 solution, Clean Architecture project references, a public process liveness endpoint, development HTTPS configuration, development-only OpenAPI, and automated tests. Domain, Application, and Infrastructure intentionally contain no business implementations.
+The project provides a .NET 10 solution, Clean Architecture project references, a public process liveness endpoint, development HTTPS configuration, development-only OpenAPI, and automated tests. Domain now implements the immutable Money value object and the initial Account entity. Application and Infrastructure have no business implementations yet.
 
-There are no users, login flows, database connections, EF Core packages, migrations, financial operations, dashboards, or frontend yet. The documentation describes their proposed future design.
+There are no users, login flows, database connections, EF Core packages, migrations, account balances, deposits, withdrawals, transfers, financial HTTP endpoints, dashboards, or frontend yet. The documentation distinguishes implemented domain behavior from future features.
 
 ## Prerequisites
 
@@ -27,7 +27,7 @@ dotnet build VaultFinance.slnx --no-restore
 dotnet test VaultFinance.slnx --no-build --no-restore
 ```
 
-The unit test calls the health handler directly. Integration tests start the actual application through `WebApplicationFactory<Program>`, verify anonymous `GET /health` in Development and Production, and verify that OpenAPI is exposed only in Development. Their in-memory server uses an HTTPS request scheme but does not exercise certificate trust, TLS negotiation, or a real network socket.
+Unit tests reference Domain directly and exercise Money and Account without API hosting or infrastructure. They cover validation, normalization, value equality, exact signed arithmetic, currency compatibility, decimal limits, renaming, and archiving. Integration tests start the actual application through `WebApplicationFactory<Program>`, verify anonymous `GET /health` in Development and Production, and verify that OpenAPI is exposed only in Development. Their in-memory server uses an HTTPS request scheme but does not exercise certificate trust, TLS negotiation, or a real network socket.
 
 Only xUnit, its VSTest adapter, Microsoft.NET.Test.Sdk, and Microsoft.AspNetCore.Mvc.Testing are declared as test packages. Microsoft.AspNetCore.OpenApi is the API template's runtime documentation package.
 
@@ -104,14 +104,14 @@ docs/
 
 | Project | Responsibility | Direct project references |
 | --- | --- | --- |
-| Domain | Future business concepts and invariants | None |
+| Domain | Money, Account, and their business invariants | None |
 | Application | Future use cases and required ports | Domain |
 | Infrastructure | Future persistence and identity adapters | Application, Domain |
 | Api | HTTP endpoints and composition root | Application, Infrastructure |
-| UnitTests | Isolated behavior checks; currently the health handler | Api |
+| UnitTests | Isolated Money and Account behavior checks | Domain |
 | IntegrationTests | Actual ASP.NET Core pipeline checks | Api |
 
-The unit test references Api because the only implemented behavior is an HTTP health handler. Tests for future domain rules and application use cases should reference their corresponding projects when those behaviors exist.
+UnitTests no longer references Api; the health HTTP contract remains covered by IntegrationTests. Tests for future application use cases should reference Application when its behavior exists.
 
 ## Configuration and security
 
@@ -119,13 +119,13 @@ The unit test references Api because the only implemented behavior is an HTTP he
 
 The template's `AllowedHosts: "*"` must be narrowed through deployment configuration when real hostnames are known. HTTPS listeners/certificates and trusted proxy settings must also be supplied for deployment. Local launch settings do not secure a production installation.
 
-Never place credentials or real connection strings in tracked settings files. Future secrets will come from environment variables, explicitly configured developer User Secrets, or a deployment secret store. Files ignored as local settings are not automatically loaded. No secret storage, authentication, CSRF middleware, persistence, or financial logic is implemented yet.
+Never place credentials or real connection strings in tracked settings files. Future secrets will come from environment variables, explicitly configured developer User Secrets, or a deployment secret store. Files ignored as local settings are not automatically loaded. No secret storage, authentication, CSRF middleware, persistence, or financial workflows are implemented yet.
 
 ## Design documentation
 
 - [Requirements and scope](docs/requirements.md)
 - [Architecture and dependency rules](docs/architecture.md)
-- [Proposed domain model](docs/domain-model.md)
+- [Implemented and proposed domain model, with usage examples](docs/domain-model.md)
 - [Planned security strategy](docs/security.md)
 - [ADR-001: Modular monolith](docs/decisions/ADR-001-modular-monolith.md)
 

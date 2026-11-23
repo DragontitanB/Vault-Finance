@@ -2,7 +2,7 @@
 
 ## Current implementation
 
-The API provides only an anonymous process liveness endpoint, HTTPS redirection, a development HTTPS launch profile, and development-only OpenAPI JSON. No Identity registration, authentication, session cookies, antiforgery validation, resource authorization, financial validation, idempotency, or auditing is implemented.
+The API provides only an anonymous process liveness endpoint, HTTPS redirection, a development HTTPS launch profile, and development-only OpenAPI JSON. Domain now validates Money and Account invariants, but these types are not exposed through financial endpoints. No Identity registration, authentication, session cookies, antiforgery validation, resource authorization, financial HTTP request validation, idempotency, or auditing is implemented. Immutable UserId on Account is a domain invariant, not proof of authenticated ownership or a substitute for authorization.
 
 The following sections define planned controls for later iterations. They are not claims of existing protection.
 

@@ -13,7 +13,17 @@ Vault Finance will help individuals record and understand their own finances. Th
 - A direct handler unit test and real application integration tests using WebApplicationFactory.
 - Initial requirements, architecture, domain model, security strategy, and an architectural decision record.
 
-This iteration does not implement the future MVP below.
+The first iteration did not implement the future MVP below. The following domain iteration adds only the primitives listed here, without application use cases or financial endpoints.
+
+## Iteration 2: implemented domain primitives
+
+- Immutable Money with decimal amounts, normalized DOP/USD currencies, value equality, and exact same-currency addition/subtraction.
+- At most two effective decimal places; zero and negative amounts are allowed. Excess precision, overflow, and arithmetic precision loss are rejected instead of rounded.
+- Account with non-empty Guid identity and owner, a trimmed 1-to-100-character name, immutable ownership/currency, and Active/Archived states.
+- Validated renaming for active accounts and idempotent archiving. Archived accounts cannot be renamed or reactivated.
+- Direct Domain unit tests. Existing health/OpenAPI integration tests are unchanged.
+
+This is domain behavior only. Account opening balances, opening dates, descriptive types, persistence, resource authorization, and all financial workflows remain deferred. The name limit is measured in UTF-16 code units, as detailed in the domain model.
 
 ## Proposed MVP: future work
 
@@ -27,7 +37,7 @@ This iteration does not implement the future MVP below.
 8. Accountability: audit relevant changes and protect retryable financial write operations with idempotency.
 9. Persistence: introduce EF Core 10, SQL Server, schema migrations, and database-backed integration tests when the relevant use cases are implemented.
 
-The initial MVP proposes one reporting currency per user. All their accounts, transactions, transfers, and budgets must use that currency. Currency selection and supported precision need an explicit decision before financial implementation.
+The initial MVP proposes one reporting currency per user. All their accounts, transactions, transfers, and budgets must use that currency. Money and Account currently support DOP and USD, with two effective decimal places for Money. User currency selection and enforcement across their accounts remain future application responsibilities; an Account alone cannot enforce that policy. SQL precision and persistence limits will be decided with persistence.
 
 ## Quality requirements
 
@@ -47,4 +57,4 @@ Microservices, RabbitMQ, Redis, MediatR, generic repositories, and speculative a
 
 ## Foundation acceptance
 
-Restore, build, and tests must pass with the configured stable SDK. The API must return HTTP 200 and exactly the documented health payload, OpenAPI must be limited to Development, and production references must follow the dependency rules. No persistence or financial functionality may be claimed as complete.
+Restore, build, and tests must pass with the configured stable SDK. The API must return HTTP 200 and exactly the documented health payload, OpenAPI must be limited to Development, and production references must follow the dependency rules. Domain must remain independent of frameworks and other projects. Money and Account unit tests must pass without API dependencies. No unimplemented persistence or financial workflows may be claimed as complete.

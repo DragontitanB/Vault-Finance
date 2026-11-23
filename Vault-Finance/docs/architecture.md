@@ -2,7 +2,7 @@
 
 ## Current structure
 
-Vault Finance starts as a modular monolith using Clean Architecture: one deployable API and inward-facing compile-time dependencies. The initial projects establish layers only. Business modules, interfaces, adapters, and domain entities have not been implemented.
+Vault Finance is a modular monolith using Clean Architecture: one deployable API and inward-facing compile-time dependencies. Domain currently implements Money, Account, AccountStatus, and explicit domain errors. Application and Infrastructure have no behavior yet. No business module assemblies, application ports, persistence adapters, or financial endpoints are implemented.
 
 | Layer | Responsibility | Allowed direct dependencies |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ Production hosting, host allowlists, certificates, reverse proxy trust, exceptio
 
 ## Testing
 
-UnitTests currently references Api and calls the only implemented handler without hosting. Future tests should target Domain and Application when their behavior exists.
+UnitTests references Domain directly, with no Api or Infrastructure project reference. Tests cover Money construction, normalization, precision, value equality, signed arithmetic, incompatible currencies, overflow, and exactness at decimal boundaries. Account tests cover valid creation, identifiers, name and currency validation, safe renaming, archive transitions, and rejection of edits after archiving. The original handler unit test was replaced by domain tests; the existing HTTP integration tests still protect the health contract.
 
 IntegrationTests references Api and Microsoft.AspNetCore.Mvc.Testing. WebApplicationFactory starts the real application pipeline in memory. Tests verify the health HTTP contract without credentials in Development and Production, plus development-only OpenAPI exposure. These tests do not validate network listeners, TLS, SQL Server, or unimplemented business rules.
 

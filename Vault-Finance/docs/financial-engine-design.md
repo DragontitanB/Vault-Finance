@@ -1,468 +1,251 @@
 # Financial Engine Design
 
-Status: Proposed; documentation only. Date: 2026-11-23.
+Status: Accepted architecture; pure Domain increment 1 only. Updated: 2026-11-23.
 
-This is a design for simulated personal finances, not a banking, custody, payment, or settlement system. A recorded balance is a calculation over user-entered simulation data, not evidence of funds at a financial institution.
+Vault Finance records simulated personal-finance assertions, not bank funds, custody, settlement, or credit. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the accepted architecture. There is no financial persistence, migration, writer, balance calculator, correction coordinator, or endpoint in this increment.
 
-No financial entities, services, endpoints, packages, database changes, or migrations are implemented by this document. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the recommendation. Product decisions Q1-Q8 below must be resolved before implementation.
+## 1. Review and resolved contradictions
 
-## 1. Baseline inspected and conflicts to resolve
+Money and Account remain unchanged. Money accepts signed/zero decimal values, DOP/USD, two effective decimal places, and the CLR decimal range. Account has immutable identity/owner/currency and Active/Archived states, but no balance, opening information, reactivation, or creation timestamp. Existing EF maps accounts and Identity only.
 
-The repository currently contains:
-
-- Immutable Money using decimal, DOP/USD, two effective decimal places, signed/zero values, value equality, and checks for overflow or loss of arithmetic exactness. Its tests explicitly accept decimal.MaxValue and decimal.MinValue.
-- Account with immutable Guid identity/owner/currency, validated name, Active/Archived state, Rename, and idempotent Archive. There is no balance, opening date, account type, reactivation, or creation timestamp.
-- Owner-scoped account use cases and an EF adapter. Reads use AsNoTracking; rename uses a conditional update to prevent editing after archive. No financial posting protocol exists.
-- Identity cookies, CSRF, ProblemDetails, and SQL Server 2019 compatibility 150. InitialPersistence maps Accounts and Identity only.
-- Existing sequential HTTP/SQL tests sharing a transaction per test. The repository reports 181 passing cases; this design task does not rerun or independently certify that baseline.
-
-Existing future proposals are not all compatible with an immutable engine:
-
-| Existing proposal | Proposed resolution, subject to approval |
+| Earlier proposal | Accepted resolution |
 | --- | --- |
-| Correct/delete transactions in requirements and domain-model | Confirmed operations cannot be edited/deleted. Corrections use compensating operations; drafts are outside the journal. |
-| No arbitrary Money maximum; preserve its decimal range in persistence | Keep Money unchanged. Either approve an explicit posting/balance range, or implement and prove a full-range representation. Ordinary decimal(18,2) is insufficient. |
-| Negative balances may be valid; overdraft rules undecided | Recommend funded simulated accounts with no negative balance for the first engine. Liability/credit accounts require a separate policy. |
-| Archived accounts block new activity, but correction behavior unspecified | Block ordinary postings; propose a narrow exception for exact compensating reversals, without reactivation. |
-| Category on future transactions | Categories are not implemented. Do not invent a required category FK/table in this first engine; add classification in a later increment. |
-| Future idempotency keys scoped by owner/operation | Propose one owner/key namespace across financial command kinds, with kind included in the fingerprint. This scope change also needs agreement. |
+| Zero monetary Opening | Monetary magnitudes are strictly positive. Explicit zero initialization/replacement uses an auditable opening-version record with no zero-valued operation. |
+| One Opening operation forever | One initialization root with immutable revisions; controlled correction may create replacement Opening operations. |
+| Separate reversal/replacement commits | Opening correction is one indivisible posting batch and one durable result/audit outcome. |
+| Validate each correction component as a standalone debit | Validate the complete batch's final balance vector; its uncommitted component prefixes are not observable financial states. |
+| Owner-wide idempotency | Owner, server-selected command type, and key. |
+| UTC calendar or user-selected historical opening | UTC instants; America/Santo_Domingo accounting date; no user backdating/scheduling. |
+| Undecided overdrafts | No credit/overdraft accounts, negative openings, or negative confirmed balances. |
+| Edit/delete confirmed transactions | Immutable originals and compensating operations only. |
 
-The existing Domain, requirements, and architecture are not silently rewritten here. Approval must reconcile the affected future requirements before coding.
+These resolutions close the architectural contradictions. Unimplemented SQL guarantees remain subsequent verification gates, not assumed capabilities.
 
-## 2. Two persistence models
+## 2. Model choice
 
-### A. Full double-entry ledger
+Use an immutable canonical operation journal with derived movements/balances.
 
-Persist a JournalEntry and two or more immutable Posting rows against ledger accounts. For every committed entry and currency, total debits must equal total credits.
+A transfer has one magnitude and both participants in one operation. Its two effects cannot be independently posted. Income/expense have one actual account effect without artificial counterpart ledger accounts. A reversal references its original rather than copying editable amount/account fields.
 
-User-visible accounts are asset-like ledger accounts; external income, expenses, and opening principal need counterpart accounts. For example, simulated income debits a user account and credits an income counter-account; a transfer debits the destination and credits the source.
+Full double entry remains an alternative for liabilities, splits, or accounting statements, but requires counterpart semantics and cross-row balancing while still needing funds checks, authorization, locking, and idempotency. It is deferred. Independent transfer rows, mutable balances as sole truth, generic repositories, event sourcing, and distributed coordination are not selected.
 
-This supports a complete accounting equation, richer liabilities/equity, split entries, and accounting-oriented reporting. It also requires ledger-account semantics, counterpart management, posting rules, and enforcement of cross-row balancing. A simple row CHECK cannot establish a sum over multiple postings. A controlled transaction/write boundary must enforce it.
+A posting batch is the SQL confirmation boundary. Ordinary monetary commands contain one operation; opening correction can contain two operations plus a revision. Zero initialization contains a revision/result/audit but no monetary operation.
 
-Double entry does not itself prevent an asset balance from becoming negative, provide idempotency, authorize ownership, or make unbalanced partial writes impossible. Those still need explicit controls.
+## 3. Approved numeric, currency and date contracts
 
-### B. Immutable operation journal with derived balances
+Financial operation magnitudes satisfy 0 < amount <= 99999999999999999999999999.99, corresponding to decimal(28,2); the minimum meaningful magnitude is 0.01. Confirmed per-account balances must be within [0, Bmax]. Generic Money keeps its existing wider signed/zero contract.
 
-Persist one canonical FinancialOperation per confirmed operation. An ordinary row stores a magnitude and source/destination references. Income has only a destination; expense only a source; transfer has both and one shared amount.
+DOP/USD remain independent. Account/amount currencies must match; both transfer accounts must have the same owner/currency and distinct IDs. No FX or mixed-currency total is inferred.
 
-Derive one or two signed account movements from that row through a read-only projection. A reversal references an immutable original and derives its exact opposite; it does not store editable copies of its amount or accounts.
+Recording instants are explicit UTC DateTimeOffset values with zero offset. America/Santo_Domingo determines EffectiveDate. The future writer captures one trusted SQL UTC instant after locks and shares it across the complete batch. No client-supplied recording/effective date, backdating, or scheduling is accepted, including opening initialization/correction.
 
-This is an auditable operation journal, not full double-entry accounting. Income/expense are external boundaries without counterpart ledger accounts.
+Domain construction receives a deterministic instant rather than reading a wall clock. It cannot prove that the caller used the trusted current clock. The writer must also reject account-wide effective-date/clock regression against committed history.
 
-| Criterion | A: double entry | B: canonical operation journal |
+Timezone data must resolve the IANA identifier; no silent UTC fallback. Future persistence stores the effective date/timezone and must preserve those historical facts on materialization, rather than reinterpret them after timezone-rule updates.
+
+UTC is not a commit timestamp or a perfectly monotonic clock. A bigint batch identity can have gaps and is not a global commit watermark.
+
+## 4. Pure domain model implemented now
+
+Namespace: VaultFinance.Domain.FinancialOperations.
+
+| Type | Responsibility |
+| --- | --- |
+| FinancialAmount | Immutable Money wrapper enforcing positive bounded magnitudes. Money validates decimal precision and currency. |
+| FinancialPostingContext | Immutable non-empty batch ID and explicit UTC instant; derives the Santo Domingo effective date. |
+| FinancialOperationKind | Opening, Income, Expense, Transfer, Reversal. |
+| FinancialOperationStatus | Confirmed only; no mutable Draft/Pending/Reversed workflow. |
+| FinancialOperation | Sealed immutable operation descriptor created through validated factories. |
+
+The descriptor contains identity, owner, context, kind/status, currency, optional magnitude, participant IDs, optional original ID/kind, and bounded immutable reason. It retains IDs, not mutable Account references.
+
+Factories use account snapshots for local owner/currency/Active validation. They do not establish that these facts remain true at commit. The future SQL writer must reload them under locks.
+
+Confirmed denotes the immutable domain representation, not proof of database durability, available funds, initialization, or global reversal uniqueness. Only a successful later writer commit establishes a durable journal fact. There is no edit/delete/confirm-again transition API.
+
+## 5. Operation shapes and local invariants
+
+| Kind | Representation | Future effect |
 | --- | --- | --- |
-| Authoritative data | Entry plus balanced posting set | One operation row; movements derived |
-| Income/expense | Requires counterpart accounts | One actual account effect |
-| Internal transfer | Two balanced postings, grouped atomically | Both accounts and common amount in one row |
-| Global accounting equation | Supported if posting rules are enforced | Not a full general ledger |
-| Audit/reversal | Immutable entry and compensating entry | Immutable operation and exact inverse reference |
-| Balance consistency | Aggregate postings; cache optional | Aggregate derived movements; cache unnecessary initially |
-| Overspending/idempotency | Additional concurrency/key protocol needed | Same additional protocol needed |
-| Complexity for current scope | Ledger accounts, types, balancing rules | Five bounded operation kinds and a read projection |
-| Natural expansion | Liabilities, split entries, full accounting | Personal income/expense and same-owner transfers |
-| Principal limitation | More semantics and failure surfaces now | Later GL capabilities require explicit migration |
+| Opening | Positive magnitude, destination only; required reason | Destination +amount |
+| Income | Positive magnitude, destination only | Destination +amount; income increases |
+| Expense | Positive magnitude, source only | Source -amount; expense increases |
+| Transfer | Positive magnitude, distinct owned same-currency source/destination | Equal opposite effects |
+| Reversal | Original ID/kind only; no copied magnitude/participants; required reason | Exact inverse of original |
 
-### Recommendation
+All IDs are non-empty. Reversal has the same owner/currency as its original, a distinct operation and batch ID, and cannot precede the original recording instant. Reversal of a reversal is forbidden. The reason is trimmed, at most 200 UTF-16 code units, required for Opening/Reversal; optional whitespace notes become null.
 
-Choose B for the MVP. It meets the current personal-finance scope without artificial income/equity accounts, event sourcing, microservices, messaging, generic repositories, or balance caches.
+Ordinary factories require Active accounts. Reversal does not require Active snapshots: its immutable original supplies the reference, while the controlled writer later checks ownership, funds, and eligibility. It never reactivates or changes Account.
 
-The design intentionally avoids a pair of independent transfer transaction rows and a second persistent movements table. One canonical row makes a half-transfer structurally unrepresentable. Its two movements are derived, not independently writable.
+Use existing DomainException for invalid business values and ArgumentNullException for missing required object dependencies, consistent with Money arithmetic. No framework-specific error types belong in Domain.
 
-Reconsider A when liabilities, split allocations, full accounting statements, or external accounting integration become actual requirements. Do not advertise B as double entry merely because transfers have two effects.
+Two independent reversal descriptors can be locally valid for one original. They are not two allowed postings: the writer and a global SQL unique constraint must reject the second. No in-memory registry or mutable original flag claims that guarantee.
 
-## 3. Proposed domain and lifecycle
+## 6. Derived balance contract
 
-These are conceptual types, not new code:
+For an initialized owner/account/currency, balance at a cutoff is the sum of signed effects from complete committed posting batches through that cutoff.
 
-- FinancialOperation: immutable confirmed aggregate identified by Guid; owner, currency, operation kind, effective date, recording instant, reason, and source/destination or reversal reference.
-- OpeningBalance: initializes one account explicitly, including zero. Its date establishes the account's financial baseline.
-- Income: positive magnitude credited to one owned account.
-- Expense: positive magnitude debited from one owned account.
-- Transfer: positive magnitude moved between distinct owned accounts with equal currency.
-- Reversal: a reference to one owned, non-reversal operation; reverses all of it exactly once. No client-selected amount/accounts.
-- AccountMovement: read projection identified by operation and source/destination leg, containing signed Money and dates; not a separately persisted aggregate.
-- FinancialRequestOutcome: durable success/rejection receipt for an idempotency key.
-- FinancialAuditEntry: minimal immutable evidence linking an outcome to the actor, event/reason, and correlation identifier.
+No opening revision means Uninitialized, not silently zero. An explicit zero initialization is Initialized at zero but has no zero monetary operation. There is no mutable Account.Balance, balance cache, pending settlement, or bank-available balance.
 
-Only committed operations exist in the journal. Drafts, scheduled movements, reservations, holds, and bank-available balances are excluded. Do not introduce Pending/Confirmed state transitions before a real need exists.
+Every committed batch leaves each participant within [0, Bmax]; validate receiving headroom as well as outgoing sufficiency. Transfers and their reversals cancel per owner/currency. Opening principal/corrections are excluded from income/expense; income reversals reduce income and expense reversals reduce expense.
 
-Application will own posting/reversal use cases and narrow persistence/clock ports. Domain will own pure shape, amount, currency, and reversal rules. Infrastructure will own SQL locks, transactions, mapping, aggregation, and durable outcomes. API will own authenticated DTOs, CSRF, headers, validation, and ProblemDetails. No existing Account balance setter is required.
+The batch is simultaneous for balance/reporting. Do not expose a cutoff or BalanceAfter between its components. Historical balances order complete batches, not arbitrary component rows.
 
-## 4. Proposed business invariants
+Example: opening 100, expense 80, current balance 20. Correction to opening 80 creates compensation -100 and replacement +80 atomically. Final balance 0 is valid; the algebraic subtotal -80 is not a separately committed state. A replacement of 70 would leave -10 and must reject the entire batch without consuming the original's reversal.
 
-1. Owner identity comes from authenticated server claims, never the request body.
-2. All referenced accounts, original operations, and outcomes belong to that owner. A missing or foreign identifier produces the same 404.
-3. DOP/USD remain separate. Every operation uses the participating account currency; both transfer accounts must match. No FX or mixed-currency total is inferred.
-4. Income, expense, and transfer magnitudes are strictly positive. Opening may be zero. Signed movement/balance values do not change Money's generic sign semantics.
-5. Each account requires one explicit opening record before ordinary financial activity. An uninitialized balance is unavailable, not silently zero.
-6. A transfer cannot target its own source account and cannot create two independently committed effects.
-7. Under the proposed funded-account policy, every affected account's resulting balance must remain within [0, Bmax]. Validate destination overflow as well as source sufficiency.
-8. Confirmed operation fields cannot be updated/deleted; reversals retain the original record and reason.
-9. At most one full reversal exists per original. Reversal of a reversal and partial reversals are excluded.
-10. Opening principal is not income; transfers are neither income nor expense. Income reversals reduce income; expense reversals reduce expense.
-11. All ordinary participating accounts must be Active while the operation commits. Status checked before a transaction is insufficient.
-12. Archived accounts remain visible in balance/history queries. Archiving never removes their balance or sets it to zero.
-13. Operation, durable request outcome, and financial audit evidence commit together, or no operation commits.
-14. Repeated matching idempotency keys return the first durable outcome; they do not create another operation.
-15. Financial posting order, dates, and numeric checks follow the same rules for reversals as for original operations.
+Reversals take the current effective date; do not hide originals globally or rewrite their original reporting period.
 
-### Opening, corrections, and archived accounts
+## 7. Opening initialization and corrections
 
-Recommend explicit initialization for existing and new accounts, including a zero opening. The current account create contract remains name/currency only. A future opening use case can initialize it without changing Account or inventing a mutable OpeningBalance property.
+Do not implement the old unique index that permits only one monetary Opening forever.
 
-An opening record is one-time per account. Reversing it cancels its contribution but does not erase initialization or its baseline date. For the minimal proposal, a second opening/replacement opening is not supported. Correcting an opening to a different amount needs an explicit approved adjustment/replacement design before enabling that feature; do not disguise it as income. This is decision Q5, not a solved workflow.
+Future FinancialOpeningVersions provides one immutable revision chain per owner/account/currency:
 
-Recommend allowing exact reversals on archived accounts as a narrow audit exception. The caller supplies only the original operation reference and reason. Ownership, currency, one-reversal, sufficiency, and upper-bound checks still apply. The account stays Archived. This provides a correction path without adding reactivation or allowing arbitrary new income/expense/transfer activity on archived accounts.
+- Revision 1 initializes exactly once.
+- Later revisions reference the immediately preceding revision.
+- A positive revision references its new Opening operation.
+- A zero revision explicitly has no Opening operation.
+- Old versions and operations never change.
 
-Reversing an income or incoming transfer can be rejected if the received amount has already been spent. Never force a negative balance to make a reversal succeed. Reversing dependent spending first may restore eligibility. No automatic cascade or forced admin adjustment is proposed.
+The future CorrectOpening command carries the expected current revision, desired nonnegative bounded opening amount, reason, and idempotency key. Under the account lock it validates that revision and constructs:
 
-For income/expense/transfer corrections, a reversal and a replacement are individually atomic commands. Two HTTP calls are not an atomic correction bundle; an all-or-nothing replacement workflow requires a later explicit command.
-
-## 5. Numeric storage: a decision gate
-
-Current Money accepts the CLR decimal range, not just the range of a typical SQL monetary column. Changing that type is outside this design task.
-
-| Representation | Assessment |
-| --- | --- |
-| SQL money/float/real | Reject: wrong scale contract or approximate arithmetic. |
-| decimal(18,2) | Only 16 integer digits; silently adopting it would contradict existing Money boundary tests. |
-| decimal(31,2) with CLR maximum CHECK | SQL can hold the numeric maximum plus two fractional places, but that alone does not establish safe SqlClient/CLR round-trip behavior. |
-| decimal(28,2) with an explicit posting bound | Predictable two-place CLR representation across its whole column range; narrows the set of accepted financial commands and requires approval. |
-| Full-range minor units or canonical representation | Possible with SqlDecimal/BigInteger or another exact conversion boundary; more mapping/query complexity, to be proven if required. |
-
-Provisional MVP recommendation: monetary columns decimal(28,2), with Bmax = 99999999999999999999999999.99, and explicit validation of both amounts and resulting per-account balances. This is a financial-use-case limit, not a change to Money. A mathematically valid Money outside this range must be rejected before SQL, with a documented error, never truncated or rounded. If preserving the complete existing Money range in persistence is mandatory, reject this recommendation and resolve the full-range mapping first.
-
-A read-only diagnostic in Windows PowerShell 5.1 / .NET Framework 4.8 parsed 79228162514264337593543950335.00 as SqlDecimal with precision 31/scale 2; get_Value threw OverflowException. The decimal(28,2) upper bound converted exactly. This was not a .NET 10/EF/SQL Server round-trip test. Large fixed-scale coefficients can exceed CLR decimal storage despite fitting numerically at a lower scale. The [.NET implementation](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Data.Common/src/System/Data/SQLTypes/SQLDecimal.cs) demonstrates that conversion limit. Current [SqlClient source](https://github.com/dotnet/SqlClient/blob/main/src/Microsoft.Data.SqlClient/src/Microsoft/Data/SqlClient/SqlBuffer.cs) also contains trailing-zero normalization: the BCL failure is not proof that the installed provider fails. Pin the provider version and test its real boundary behavior before deciding.
-
-SQL SUM over decimal uses decimal(38, scale). Keep wide aggregation and range comparisons in SQL; only convert a validated, bounded per-account result to CLR decimal. Do not cast an arbitrary global aggregate directly into Money. Consolidated totals beyond that contract are deferred. See [SQL SUM return types](https://learn.microsoft.com/en-us/sql/t-sql/functions/sum-transact-sql?view=sql-server-ver15) and [precision/scale rules](https://learn.microsoft.com/en-us/sql/t-sql/data-types/precision-scale-and-length-transact-sql?view=sql-server-ver15).
-
-A wide type is not automatically a safe arithmetic intermediate. Adding two declared decimal(38,2) values requests precision 39; SQL's result-type rules can reduce the scale to one even for tiny values. Do not compute balance-plus-amount or reconciliation residuals using unchecked wide decimal arithmetic. First range-check the aggregate, then cast the bounded account balance to decimal(28,2). Adding/subtracting a decimal(28,2) magnitude then yields a decimal(29,2) intermediate; validate its result against [0, Bmax] before narrowing.
-
-For global reconciliation, compare corresponding exact sums directly, or use explicitly derived integer minor units and arbitrary-precision accumulation. Never accept a rounded residual as zero. Test the actual SQL expression metadata and one-cent cases, not just column definitions.
-
-Validate effective precision before binding a fixed-scale SQL parameter: SQL conversion can round. Input containing 1.001 must not become 1.00. Trailing zeros such as 1.2300 remain numerically compatible with current Money.
-
-Recommend decimal strings at future HTTP boundaries to avoid a JavaScript binary-number round trip. Define invariant parsing with no grouping/exponent coercion, bounded input length, rejection of meaningful excess digits, and canonical two-place receipts/fingerprints. Very long fractional strings must not round to zero during parsing.
-
-Future zero- or three-decimal currencies require an explicit Money policy, currency validation, schema, contract, and test revision. A wider SQL scale cannot by itself make current Money support them. Do not reinterpret already recorded amounts when extending currency support.
-
-## 6. Dates and ordering
-
-Store effective time separately from recording metadata:
-
-- EffectiveDate: SQL date / DateOnly, used for financial-period reports.
-- RecordedAtUtc: SQL datetimeoffset(7), restricted to offset +00:00, supplied by a trusted server clock; never client-assigned.
-- AccountingTimeZoneId: the configured accounting calendar identifier captured with the operation.
-- PostingSequence: bigint identity, generated after account locks; deterministic tie-breaker, not a gapless or global commit sequence.
-
-Capture one trusted UTC instant from SQL Server after account locks are acquired, then derive the effective accounting date and recording metadata from that instant. Do not sample unrelated client/application clocks for different pieces of one operation. UTC still does not imply a perfectly monotonic physical clock.
-
-Recommend a single explicitly configured accounting timezone initially; UTC is the provisional option, not an inferred user location. Opening can have a selected date no later than today in that calendar. Ordinary postings and reversals use the server-resolved current accounting date. Reject scheduling and backdating in the initial engine.
-
-Under account locks, also reject a date earlier than the latest effective date affecting any participant, including a clock/configuration regression. This keeps per-account effective dates nondecreasing. Same-date history uses PostingSequence for a stable order.
-
-If backdating is later allowed, checking today's balance is not sufficient to guarantee historical nonnegative balances. For example, income 100 on day 10 followed by an expense 80 backdated to day 5 leaves today's balance 20 but day 5 negative. Supporting that policy requires validating affected running-balance prefixes/suffixes under the same locks, or explicitly permitting negative historical balances.
-
-Reversals take today's effective date; they do not rewrite the original reporting period. Historical queries include originals and reversals according to each row's own effective date, not by globally hiding reversed originals.
-
-RecordedAtUtc is not a guaranteed commit timestamp. Identity sequences can have gaps, and transactions on unrelated accounts can commit out of sequence. Never use MAX(PostingSequence) alone as proof that all lower sequences have committed.
-
-## 7. Proposed relational schema
-
-No DDL or migration is created here. All new financial FKs use NO ACTION; no cascade deletion of history.
-
-### Existing Accounts: proposed future candidate key only
-
-Retain current columns, types, invariants, and domain API. Add a future unique candidate key (UserId, Currency, Id) to support ownership/currency composite FKs. Currency columns must share the existing column collation/type; retain binary-sensitive code CHECKs without casually changing the current column collation.
-
-### FinancialOperations
-
-| Column | Proposed type and purpose |
-| --- | --- |
-| Id | uniqueidentifier, server-generated immutable public PK |
-| PostingSequence | bigint identity, unique clustered ordering key |
-| UserId | uniqueidentifier, FK to Identity owner |
-| Currency | varchar(3), required DOP/USD |
-| Kind | tinyint: Opening, Income, Expense, Transfer, Reversal |
-| Amount | decimal(28,2) under Q1; null only for Reversal |
-| SourceAccountId | nullable uniqueidentifier, debit participant |
-| DestinationAccountId | nullable uniqueidentifier, credit participant |
-| OriginalOperationId | nullable uniqueidentifier, reversal reference |
-| OriginalOperationKind | nullable tinyint, constrained non-reversal discriminator |
-| EffectiveDate | date, required |
-| RecordedAtUtc | datetimeoffset(7), required offset zero |
-| AccountingTimeZoneId | bounded varchar, trusted configuration value |
-| Reason | bounded nvarchar(200), immutable; required for opening/reversal |
-
-Shape constraints must use explicit IS NULL/IS NOT NULL predicates; SQL CHECK accepts UNKNOWN and is not a substitute for nullability checks.
-
-| Kind | Amount and account shape |
-| --- | --- |
-| Opening | Amount >= 0; destination only; no original reference |
-| Income | Amount > 0; destination only; no original reference |
-| Expense | Amount > 0; source only; no original reference |
-| Transfer | Amount > 0; both accounts present and distinct; no original reference |
-| Reversal | Amount/source/destination null; original ID/kind required; kind restricted to Opening/Income/Expense/Transfer |
-
-Required keys/constraints:
-
-- PK Id; unique PostingSequence.
-- Candidate key (UserId, Currency, Id, Kind).
-- Candidate key (UserId, Id) for same-owner outcome references. These additional unique keys are intentional SQL FK targets; uniqueness of Id alone does not declare a composite FK target.
-- Composite source and destination FKs (UserId, Currency, AccountId) to Accounts(UserId, Currency, Id). These enforce same owner/currency for every non-null participant.
-- Composite self-FK (UserId, Currency, OriginalOperationId, OriginalOperationKind) to the operation candidate key. The discriminator restriction prevents reversal-of-reversal without a cross-row CHECK.
-- Filtered unique (UserId, DestinationAccountId) for Opening: one initialization record, including zero.
-- Filtered unique (UserId, OriginalOperationId) where the reference is non-null: at most one full reversal.
-- Required valid kind/currency/range/date-offset checks. State-sensitive rules such as current Active status and current funds require the posting protocol, not a row CHECK.
-
-Index the source and destination access paths separately using owner/account/effective date/sequence, with needed amount/kind/reference fields included. Index reversals for parent lookup. Do not include large notes/receipts in every index.
-
-### FinancialRequestOutcomes
-
-| Column | Proposed type and purpose |
-| --- | --- |
-| Id, UserId | uniqueidentifier keys; server ownership |
-| IdempotencyKey | varchar(128), bounded opaque ASCII key, binary case-sensitive semantics |
-| FingerprintVersion, RequestHash | smallint and binary(32), versioned canonical intent hash |
-| Outcome | Posted or Rejected; no durable Processing state |
-| OutcomeCode | bounded stable application code |
-| OperationId | nullable FK to an operation of the same owner |
-| ReceiptVersion, ReceiptJson | bounded versioned semantic receipt; JSON check |
-| RecordedAtUtc | datetimeoffset(7), offset zero |
-
-Unique (UserId, IdempotencyKey) across financial command kinds; the command kind is part of the fingerprint. A filtered unique operation link prevents multiple successful outcomes claiming the same operation. Posted requires OperationId; Rejected requires it to be null.
-
-Declare a candidate key (UserId, Id) for audit references and a same-owner FK (UserId, OperationId) to FinancialOperations(UserId, Id).
-
-Store stable result fields, not cookies, CSRF tokens, passwords, stack traces, balances that later change, or request-specific trace headers. The JSON snapshot has an explicit small size limit. All outcomes are final and append-only.
-
-### FinancialAuditEntries
-
-Id, UserId, RequestOutcomeId, EventCode, RecordedAtUtc, ActorUserId, and a bounded server correlation identifier. For the initial owner-only engine, actor and owner must agree. The outcome links to any operation, avoiding a redundant second operation reference.
-
-Unique (UserId, RequestOutcomeId) yields one financial audit event per newly finalized command outcome. A retry returns the existing outcome and does not append another financial event. Optional operational replay metrics are separate and contain no monetary payloads.
-
-### Read-only AccountMovements view/projection
-
-Normalize every ordinary row into its source/destination/amount. Normalize a reversal by joining its immutable original and swapping source/destination; use the original amount. Then emit a negative source movement and a positive destination movement.
-
-The derived row identity is (OperationId, Leg). Carry owner, account, currency, effective date, recording instant, and sequence. A transfer always derives two equal/opposite effects from the same committed row. A reversal always derives the exact inverse; it cannot supply a different amount or participant.
-
-No independently writable movements or balances table exists.
-
-## 8. Guarantees and their boundaries
-
-| Invariant | Mechanism | Limit |
+| Previous | Target | Atomic contents |
 | --- | --- | --- |
-| No half-transfer | One canonical row and fixed read projection | Projection correctness needs tests/reconciliation |
-| Exact reversal | Immutable parent reference and swapped derived effects | Privileged mutation of history invalidates the premise |
-| Same owner/currency | Composite FKs plus authenticated lookups | FKs do not authenticate a caller |
-| One initialization/full reversal | Filtered unique indexes | Opening replacement is intentionally not solved |
-| No overspending/overflow | Account lock protocol and bounded result checks | Every posting writer must use the protocol |
-| One result per key | Transaction-owned key lock, unique index, durable outcome | SQL-only scope; not external exactly-once delivery |
-| Operation/outcome/audit atomicity | One explicit SQL transaction | FKs alone do not require every parent to have an audit child |
-| Append-only history | No update/delete commands; dedicated runtime permissions | Does not resist a sysadmin or compromised migration identity |
+| Positive | Positive, different | Full reversal + new Opening + next revision |
+| Positive | Zero | Full reversal + next zero revision |
+| Zero | Positive | New Opening + next revision; no fake zero reversal |
+| Uninitialized | Zero or positive | InitializeOpening: first revision and a positive operation only when needed |
+| Unchanged value | Same | Stable no-change conflict; no redundant financial rows |
 
-The runtime role should have SELECT/INSERT, and no UPDATE/DELETE on new financial tables. Existing Identity/account metadata permissions remain separate. Do not run the deployed application as schema owner/sysadmin.
+A stale expected revision conflicts. The writer validates the final balance vector and commits all components/revision/result/audit together.
 
-The local development login's actual role membership was not inspected in this task. Existing successful SQL tests are not evidence of least-privilege runtime enforcement.
+A standalone reversal of the current opening must append the next zero revision in the same batch. It cannot silently leave the current opening revision pointing at a cancelled operation. An obsolete opening is not an alternative correction target.
 
-The recommendation assumes one trusted Infrastructure posting boundary. INSERT permission alone cannot force a writer to acquire locks, check funds, or create all audit children. If untrusted writers or independent services must insert, use a permission-hardened posting stored procedure or another enforceable database boundary before exposing that capability. Do not claim that application conventions protect against arbitrary direct SQL.
+Archived accounts allow qualifying exact cancellation/reversal if the final balance stays nonnegative. A positive opening replacement requires Active status. No account reactivation is introduced.
 
-## 9. Atomic posting and idempotency protocol
+This increment contains only positive Opening/Reversal descriptors: no opening-version entity, zero-initialization command, correction service or batch coordinator is implemented.
 
-Use one SQL connection and explicit READ COMMITTED transaction for the complete financial command, not merely the final SaveChanges. No network calls, user interaction, or logging of request bodies while holding locks.
+## 8. Precision and mapping obligations
 
-1. Authenticate, require CSRF, validate DTO shape/key/precision/limits, and canonicalize the client intent.
-2. Begin the SQL transaction.
-3. Acquire a transaction-owned exclusive sp_getapplock resource derived from owner and idempotency key, with a bounded timeout. Check its return code; a timeout/cancellation/deadlock is not successful acquisition.
-4. Look up the durable outcome by owner/key. Matching hash/version returns the original semantic receipt without rechecking today's funds/archive state. A different intent returns conflict.
-5. Resolve the owned participants and, for reversal, its immutable original. Acquire all account anchors in one deterministic order, then re-read owner/currency/status.
-6. Read initialization/current balances in a new SQL statement after the locks have been acquired. Validate the entire operation's resulting balances and dates.
-7. On a business rejection, insert only a final rejected outcome and audit event and commit. On success, insert operation, posted outcome, and audit event and commit together.
-8. Send the result only after confirmed commit. An error after commit cannot erase the durable result.
+decimal(28,2) has 26 integer digits and a coefficient that fits CLR decimal across the column range. This is an approved financial business bound, not a change to Money. Full-range generic Money must not silently be stored in a narrower column.
 
-The diagram shows the new successful-command path; replay and rejection exits follow the protocol above.
+Provider round trips must still be proved before migration. SQL parameter conversion can round: reject 1.001 before binding, preserve insignificant zeros such as 1.2300, and never route values through float/double.
 
-```mermaid
-flowchart LR
-    A["Authenticated command + key"] --> B["Begin SQL transaction"]
-    B --> C["Lock owner/key; replay or continue"]
-    C --> D["Lock owned accounts in order"]
-    D --> E["Fresh balance/date/status checks"]
-    E --> F["Append operation + outcome + audit"]
-    F --> G["Commit before response"]
-    G -. "read-only projection" .-> H["Account movements and derived balances"]
-```
+SUM(decimal) returns decimal(38, scale). Range-check the aggregate before conversion. Do not add unchecked decimal(38,2) aggregates: the result may need scale reduction. Cast validated bounded balances to decimal(28,2) before arithmetic; two operands produce decimal(29,2). Correction intermediates may be signed/wider but must retain scale 2 and satisfy the final bound.
 
-No durable Processing row/lease is needed: the native transaction-owned key lock serializes concurrent requests, and rollback/crash releases it. The unique key remains a final database defense. Resource names are namespaced, bounded below SQL's resource limit, and use a fixed hash; hash collisions may over-serialize but must never authorize or merge two distinct persisted keys.
+Compare exact reconciliation totals, not a potentially rounded residual. Future HTTP monetary strings must use bounded invariant parsing with no exponent/group coercion or loss of meaningful excess digits.
 
-A same-key retry may need a fresh CSRF token/session. Authorization and CSRF are always checked before replay. Replaying a first receipt after the account was subsequently archived is correct: the receipt describes the original posting, not current balance or current reversal status.
+Future currencies requiring other scales need an explicit Money/currency/schema/contract revision. A wider SQL scale cannot extend current Money by itself.
 
-Business rejection receipts, including insufficient funds, remain stable. A deliberate new attempt after adding funds needs a new key. Shape/auth/CSRF failures before entering the protocol do not reserve a key. Transient/ambiguous failures do not create a durable rejected business outcome.
+References: [SQL precision/scale](https://learn.microsoft.com/en-us/sql/t-sql/data-types/precision-scale-and-length-transact-sql?view=sql-server-ver15), [SUM types](https://learn.microsoft.com/en-us/sql/t-sql/functions/sum-transact-sql?view=sql-server-ver15), [IANA zones in .NET](https://learn.microsoft.com/en-us/dotnet/api/system.timezoneinfo.findsystemtimezonebyid?view=net-10.0).
 
-Canonical intent includes command/version, server-derived owner, canonical account/original IDs, currency and amount where supplied, date intent, and meaningful immutable reason. It excludes JSON property order, insignificant amount zeros, generated IDs, current balances/statuses, and recording time. A server-resolved "today" value is not recomputed into the fingerprint on retry the next day; the first successful execution stores the resolved date in its receipt.
+## 9. Future relational schema: no changes now
 
-Retain key/hash/outcome evidence for the journal's lifetime in the MVP. Expiring keys can permit duplicate posting from a late retry. Any later retention/erasure policy must explicitly change that guarantee. Enforce per-owner quotas/rate limits and bounded receipts rather than promising infinite free storage.
+Existing Account mapping and InitialPersistence remain untouched. Future financial FKs use NO ACTION; runtime history is append-only.
 
-Future HTTP adapters should preserve the existing ProblemDetails convention: 400 for invalid input/precision/CSRF, 401 for missing authentication, 404 for absent/foreign resources, 409 for state/idempotency conflicts, and a retryable unavailable response for transient/unknown outcomes. Do not expose SQL text or claim an ambiguous command definitely failed.
-
-Native lock details: [SQL Server sp_getapplock](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sp-getapplock-transact-sql?view=sql-server-ver15).
-
-## 10. Concurrency and archive races
-
-Use existing Accounts rows as shared serialization anchors, even though no balance is stored there.
-
-For each participant, issue a separate owner-scoped keyed read with UPDLOCK, HOLDLOCK inside the posting transaction. Acquire keys in a single documented SQL uniqueidentifier-compatible order, sequentially, never using Task.WhenAll on a DbContext. An ORDER BY in a multi-row query alone is not a proof of lock acquisition order. Row-level granularity is not guaranteed; escalation can reduce throughput.
-
-Complete acquisition first, then aggregate movements in a separate statement. Under READ_COMMITTED_SNAPSHOT, that later statement gets a fresh committed snapshot; combining a waiting lock acquisition and an earlier snapshot calculation can use stale data. Do not use a long transaction-level SNAPSHOT for the funds decision.
-
-Example: balance 100; two expenses of 80 with different keys. First writer holds the account anchor, validates, and commits balance 20. The second acquires the anchor afterward, reads 20, and durably rejects. If the first rolls back, the second sees 100 and can post. A transaction without this common serialization point can let both validate against 100.
-
-Transfer locks both accounts, checks source sufficiency and destination headroom, and inserts one operation. Reverse-direction transfers use the same lock order. Deadlocks can still arise from other resources/FKs/indexes; bounded whole-command retry is required.
-
-The existing archive SQL update needs an incompatible write lock on the same Account row. If posting wins, archive waits and then commits after that operation. If archive wins, the later ordinary posting re-reads Archived and rejects. Exact reversals use the approved exception. The current status-conditioned rename guard does not by itself protect financial funds.
-
-AsNoTracking is not a locking/isolation mechanism. A rowversion on Account also would not detect journal inserts unless every posting updated the shared token. A mutable balance guard with conditional SQL updates is a possible later optimization, but adds synchronized state and reconciliation obligations.
-
-These arguments depend on SQL Server 2019 behavior and compliant writers; prove them with independent-connection tests. See [SQL Server locking/versioning](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide?view=sql-server-ver15).
-
-## 11. Failures, retry, and uncertain commit
-
-| Failure point | Required outcome |
+| Future relation | Purpose |
 | --- | --- |
-| Before transaction/after failed authentication or CSRF | No financial write or reserved key |
-| Account/key lock timeout | Roll back; retryable unavailable/in-progress result, no asserted business failure |
-| After operation insert, before audit/outcome/commit | Roll back all rows; retry same key |
-| Process crash before commit | SQL rollback releases locks; no confirmed operation |
-| Commit succeeded but HTTP response lost | Same key returns original operation/receipt |
-| Connection lost during commit | Outcome unknown; resolve owner/key using a fresh connection |
-| Deadlock victim | Roll back and retry the complete command with the same key and fresh DbContext |
-| Same key, different intent | Conflict; no new operation |
-| New key, original already reversed | Business conflict; unique reversal index is final defense |
-| SQL range/conversion/invariant bug | Roll back, fail safely, investigate; never round to success |
+| FinancialPostingBatches | Owner, command type, UTC/effective date/timezone, batch ID and sequence; indivisible confirmation boundary |
+| FinancialOperations | Owner/currency/batch, kind/reason, positive ordinary magnitude/participants or original reversal reference |
+| FinancialOpeningVersions | Account/revision chain, predecessor, batch and optional positive Opening reference; null reference explicitly means zero |
+| FinancialRequestOutcomes | Owner/type/key, fingerprint/version, immutable posted/rejected receipt and optional posted batch link |
+| FinancialAuditEntries | One immutable event for each newly finalized outcome, linking to the complete batch through that outcome |
+| AccountMovements projection | Read-only signed effects of ordinary rows and original-reference inverses |
 
-Do not map every unique-key error to a successful retry: distinguish the idempotency key, one-opening, one-reversal, and unexpected key conflicts after rollback.
+Required future constraints/indexes:
 
-If EF retry strategies are enabled later, replay the entire idempotent transaction delegate, including locks and audit, with a fresh context. Do not retry an isolated insert/SaveChanges while assuming the earlier commit failed. Avoid relying on savepoint recovery with MARS; verify its setting and rollback the whole unit on protocol failure.
+- Account candidate key (UserId, Currency, Id), preserving current types/collation.
+- Same-owner/currency/batch composite FKs and immutable original references.
+- Explicit null/shape checks: ordinary positive magnitudes, distinct transfer participants, no copied reversal amount/accounts, valid kind/UTC/range/size limits.
+- Non-reversal self-FK discriminator and filtered unique (UserId, OriginalOperationId), across all command types.
+- Unique opening (UserId, Currency, AccountId, Revision); one root at revision 1; predecessor FK/check for revision minus one.
+- Positive version references tied to Opening kind and the same account/currency/batch. No zero monetary row.
+- Unique (UserId, CommandType, IdempotencyKey); same-owner receipt/batch/audit references.
+- Owner/account/effective-date/batch access indexes and original-reference lookup, without indexing large receipts/notes indiscriminately.
 
-References: [EF transactions](https://learn.microsoft.com/en-us/ef/core/saving/transactions) and [commit ambiguity/execution strategies](https://learn.microsoft.com/en-us/ef/core/miscellaneous/connection-resiliency).
+CHECK accepts UNKNOWN; nullable branches need explicit IS NULL/IS NOT NULL. Constraints alone cannot require complete cross-row batch/audit membership, current opening selection, status or funds sufficiency. The controlled writer validates those facts before commit.
 
-## 12. Balance consistency and reconciliation
+Mapping timestamps from the batch back into a domain context must preserve persisted historical dates. No mapping or rehydration bypass is added in this increment.
 
-For an initialized account, balance is SUM(signed movements) across all confirmed operations and compensations for that owner/account/currency. There is no mutable balance value to drift from the journal. A zero-initialized account has a recorded zero; an uninitialized one has no asserted opening balance.
+## 10. Controlled writer and idempotency
 
-Current balance includes all posted rows; as-of effective-date queries filter each operation and reversal by its own date. Do not remove an original globally merely because it now has a reversal.
+Use one Infrastructure financial command boundary backed by a permission-hardened SQL posting procedure. Runtime writes execute it instead of unrestricted direct financial INSERT/UPDATE/DELETE. Migration/admin permissions are separate; this is not a claim about today's Windows development login.
 
-Reconciliation must independently recompute effects from raw canonical rows and reversal references, rather than invoke the same view twice. Check:
+The procedure owns one SQL transaction, fixed supported command types and parameterized SQL, with no external calls while locked. Domain/Application validate early; SQL rechecks critical persisted facts. End-user identity is trusted authenticated server input; the procedure does not independently authenticate an HTTP user or protect against a sysadmin.
 
-- Required opening existence, uniqueness, and effective-date ordering.
-- Same-owner/currency references and valid row shapes.
-- Transfer and transfer-reversal net effect equal zero per owner/currency.
-- One reversal, exact inverse effects, no reversal cycles.
-- Posted outcomes and audit links for every operation, with receipts matching their referenced operation; rejection outcomes have no operation.
-- Bounds/nonnegative running balances under the approved date policy.
-- View/API results equal the independent calculation.
-- Global per-currency balance change equals net opening contributions (including opening reversals) plus net income minus net expense; internal transfers cancel. Compare exact totals, not a potentially scale-reduced decimal residual.
+Command types are InitializeOpening, CorrectOpening, Income, Expense, Transfer, and Reverse. They are use-case/idempotency scopes, distinct from the five journal kinds. CorrectOpening can emit several kinds.
 
-Run related checks in one RCSI statement, or use an explicitly enabled SNAPSHOT transaction for multi-query consistency. Do not assume ALLOW_SNAPSHOT_ISOLATION is enabled because RCSI is enabled. No NOLOCK/READ UNCOMMITTED reconciliation.
+Scope is exactly (owner, server-selected command type, key). The same key in another type is a different scope. Changed intent within one scope conflicts. Fingerprints include normalized payload/version and expected opening revision, excluding transient recording time, generated IDs, current balances/status and the newly resolved current date.
 
-Do not use a naive maximum identity watermark for incremental repair: an unrelated lower-sequence transaction may commit later. Full snapshot reconciliation is adequate initially. A later cache requires a consistent capture/catch-up protocol and rebuild tests.
+Future keys are case-sensitive opaque ASCII values, 1-128 characters from letters/digits/hyphen/underscore, never trimmed or truncated. Use a binary SQL collation and a versioned canonical payload encoding with SHA-256 fingerprints. Treat fingerprints as intent identifiers, not authentication; do not store secrets or log raw request bodies. Authorization always precedes receipt lookup/replay, and a receipt must not disclose another owner's operation.
 
-On mismatch, report minimal identifiers/codes, block affected new posting if financial correctness is uncertain, and investigate. Do not auto-delete history, overwrite balances, or invent an adjustment to hide the discrepancy. This is internal simulation reconciliation, not reconciliation against a bank statement or external settlement system.
+Protocol:
 
-## 13. Worked simulated operations
+1. Authenticate, validate CSRF/DTO/key/precision before SQL.
+2. Begin READ COMMITTED transaction; acquire the owner/type/key transaction-owned lock and inspect any final outcome.
+3. Matching hash/version replays the original receipt; mismatch conflicts with no new batch.
+4. Resolve owned participants/original and lock account anchors sequentially in deterministic SQL-Guid-compatible order.
+5. Re-read status/currency/initialization (all ordinary participants must already be initialized), capture one trusted UTC instant and read fresh balances in a later statement.
+6. Validate revision, reversal eligibility, complete effects and final [0, Bmax] balances.
+7. Append batch/components/revision/result/audit and commit together. Rejections append only a final rejected result and audit.
+8. Return success after confirmed commit; resolve ambiguous commit with a fresh connection and the same owner/type/key.
 
-All amounts below are DOP; A and B have the same owner and distinct identities.
+Keep key/fingerprint/results and audit for the MVP lifetime. No silent TTL. Business rejections remain stable; intentional new attempts use new keys. Pre-protocol shape/auth/CSRF failures do not reserve keys.
 
-| Step | Canonical operation | A balance | B balance | Reporting effect |
-| --- | --- | ---: | ---: | --- |
-| 1 | Opening A 1000; opening B 100 | 1000 | 100 | Opening principal only |
-| 2 | Income 500 to A | 1500 | 100 | Income +500 |
-| 3 | Expense 200 from A | 1300 | 100 | Expense +200 |
-| 4 | Transfer 300 A to B | 1000 | 400 | No income/expense |
-| 5 | Full reversal of step 4 | 1300 | 100 | No income/expense |
-| 6 | Full reversal of step 3 | 1500 | 100 | Expense -200 |
-| 7 | Full reversal of step 2 | 1000 | 100 | Income -500 |
-| 8 | Full reversal of A's opening | 0 | 100 | Opening principal -1000 |
+Receipts describe the original batch/operation IDs/revision, not a later-changing balance or authentication token. Replay after archive/reversal is valid and does not re-execute.
 
-Original rows remain visible. The last step leaves A initialized at zero; it does not permit a second opening under this minimal proposal.
+## 11. Concurrency and archived accounts
 
-Other important outcomes:
+Account rows are common anchors. Use owner-scoped keyed UPDLOCK/HOLDLOCK reads inside the transaction, consistently ordered and sequential, before the separate fresh aggregate. AsNoTracking, Account rowversion and a transaction alone do not prevent journal-insert races.
 
-- Transfer DOP A to a USD account: reject, with no partial effect.
-- Income 100 followed by expense 80: reversing that income rejects at current balance 20.
-- Replaying step 4's original key after steps 5-8 returns step 4's receipt; it does not repost.
-- Reversing step 4 again with a different key: already-reversed conflict.
-- Ordinary expense from Archived A: reject. An eligible exact reversal may proceed under Q4.
-- Nonzero incoming movement exceeding Bmax: reject atomically, including a transfer destination.
-- Reversal followed by replacement with a different amount uses a new operation/key and does not erase either original or reversal.
+Two expenses 80 against 100: first commits 20; second acquires the anchor afterward and rejects. Transfer locks both accounts and checks source funds/destination headroom. Opening corrections use the same anchor plus expected revision.
 
-## 14. Test strategy
+Archive's existing UPDATE conflicts with the anchor. If archive wins, ordinary posting/positive replacement rejects; if posting wins, archive follows. Exact reversals use the controlled exception. History/balance remain visible and no Account property is reactivated.
 
-### Pure domain/application tests
+An original remains Confirmed after compensation. SQL uniqueness must prevent two full reversals even across different command types/keys and opening corrections. No process-local state can prove this.
 
-Verify operation shapes, positive/zero rules, same-account transfer rejection, cross-currency errors, exact reversal references, identity/date immutability, original classification, no double compensation, numeric boundaries, and canonical fingerprints. Include alternative JSON order/currency case/trailing zeros, and exclusion of generated timestamps.
+Deadlocks/escalation remain possible. Bound waits and retry the whole idempotent unit with a fresh context/connection, never an isolated insert while guessing a previous commit failed.
 
-### Real SQL and HTTP integration tests
+## 12. Failures, reads and reconciliation
 
-Verify actual mappings, composite FKs, CHECK null semantics, filtered uniqueness, runtime denial of financial UPDATE/DELETE, ownership/BOLA, CSRF, archived behavior, zero opening, all-or-nothing operation/outcome/audit writes, exact receipt replay, and ProblemDetails. Round-trip decimal values and SUM outputs through the exact EF/SqlClient versions; the BCL diagnostic is not a substitute.
-
-### Independent-connection concurrency/failure tests
-
-| Scenario | Asserted result |
+| Failure | Required behavior |
 | --- | --- |
-| Two expenses 80 against 100 | Exactly one commits; other rejects; final balance 20 |
-| Many identical same-key requests | One operation/outcome/audit; same receipt |
-| Same key, differing intents | One winner; other conflict; no second effect |
-| Opposite-direction transfers | Conserved totals, no partial effects, bounded deadlock recovery |
-| Concurrent opening | Exactly one initialization, including zero |
-| Concurrent full reversals with different keys | One inverse, one already-reversed outcome |
-| Archive wins vs posting wins | Result follows actual account-lock serialization |
-| Reversal vs spending | No negative result; one sees the other's committed effect |
-| Fail after each write, before commit | No orphan operations/outcomes/audits |
-| Commit then lost response | Durable receipt replay; no duplicate |
-| Dropped connection during commit | Resolve ambiguity by owner/key, not guessed rollback |
-| Reconciliation during writes | Consistent snapshot; no false half-transfer |
+| Input/auth/CSRF rejection | No SQL effect/key reservation |
+| Key/account timeout | Roll back; retryable unavailable result |
+| Failure after a component/revision/audit write | Roll back the complete unit |
+| Crash before commit | SQL rolls back and releases transaction locks |
+| Lost response after commit | Replay the same durable receipt |
+| Connection loss during commit | Resolve uncertainty by owner/type/key; do not assert rollback |
+| Concurrent opening correction | One current revision wins; stale expectation conflicts |
+| Second full reversal | Conflict; no second inverse |
+| Range or invariant error | Roll back and investigate; never round into success |
 
-The current shared SqlConnection/transaction HTTP fixtures are useful for sequential isolation but cannot establish these concurrency guarantees. New tests need independent connections, real commit/rollback boundaries, barriers/timeouts, and final committed-state assertions. Do not wrap all concurrent workers in one shared ambient transaction.
+Use complete committed batches for reads. RCSI gives statement consistency; consistent multi-query reconciliation needs explicitly enabled snapshot isolation or another reviewed protocol. No NOLOCK. A batch identity high-water mark is not a global commit watermark.
 
-Prefer an explicitly provisioned isolated SQL Server test database with run markers and least-privilege runtime/migration roles. Any future create/drop cleanup must validate the exact local server, test-only database name, and run ownership; never repurpose the current fixture to drop VaultFinanceDb or a system database. No Docker or EF InMemory is necessary. Test infrastructure changes need their own reviewed increment.
+Independently recalculate canonical effects/reversal references/revision chains and compare with the read projection: ownership/currency, exact inverse/uniqueness, complete result/audit membership, final batch bounds, transfer conservation and net openings + net income - net expense. Include original/reversal dates individually; do not erase original history or auto-invent adjustments to hide mismatches.
 
-## 15. Small implementation increments
+Known limits remain no liabilities, FX, partial reversals, user backdating, general ledger, balance cache or MVP history-erasure workflow. Capacity, hot-account serialization, clock regressions, roles and commit ambiguity need later evidence.
 
-| Increment | Deliverable | Exit evidence |
-| --- | --- | --- |
-| 0 | Resolve Q1-Q8; reconcile future requirements and finalize ADR | Approved range, date, opening, archive, and failure semantics |
-| 1 | Pure operation/reversal rules and canonical intent specification | Deterministic unit tests; no endpoints/database |
-| 2 | Independent-connection SQL test environment; decimal round-trip spike | Exact boundary and isolation evidence; safe cleanup proof |
-| 3 | Reviewed additive schema/view/constraints/roles migration | SQL constraint/view/permission tests; initial migration untouched |
-| 4 | Atomic posting boundary, key/account locks, outcomes/audit | Concurrent zero-opening and fault-injection tests; no public financial route |
-| 5 | Opening initialization and balance query | Explicit uninitialized/zero behavior and audited replay |
-| 6 | Income and expense | Concurrent overspending/overflow tests; no negative balances |
-| 7 | Same-owner same-currency transfer | Conservation, ownership, archive-race and rollback tests |
-| 8 | Full reversals | Single compensation, funding checks and archived exception tests |
-| 9 | Authenticated HTTP adapters and operational reconciliation | Real CSRF/BOLA/receipt tests, bounded errors and observability |
+## 13. Increment boundaries and validation
 
-Each increment preserves domain/auth/account regressions, /health independence, and explicit migration review. No automatic startup migrations. A financial endpoint is not complete merely because a sequential happy-path test passes.
+Current domain tests cover bounded amounts, each kind, identifiers, ownership/currency/Active snapshots, immutable metadata, UTC/Santo Domingo boundaries, causal reversal references and forbidden mutable transitions. Prior tests are retained.
 
-## 16. Risks and questions before programming
+Not yet proved: sufficient funds, initialization/current revision, global reversal uniqueness, atomic opening replacement/transfer, idempotency, SQL permissions, locking or provider round trips. Later tests require independent connections, actual commit boundaries and fault injection; sequential shared-transaction HTTP fixtures are insufficient.
 
-| ID | Decision required | Provisional recommendation |
-| --- | --- | --- |
-| Q1 | Must every currently valid Money value persist, or may financial commands have an explicit maximum? | Approve bounded decimal(28,2), or prove a full-range alternative before schema design. |
-| Q2 | Are negative openings, overdrafts, liabilities, or credit accounts in scope? | Funded simulated accounts only; reject negative opening/result. This is a new policy, not an existing guarantee. |
-| Q3 | Which accounting timezone and effective-date/backdating rules are required? | One configured calendar; UTC provisional; current-date postings, no backdating/scheduling. |
-| Q4 | May accounts with nonzero balances be archived, and can they receive compensations? | Preserve current archive behavior; keep balances visible; permit exact full reversals only. |
-| Q5 | How must an incorrect opening be replaced, beyond cancelling it to zero? | Decide explicitly; minimal schema supports one opening and its full cancellation, not arbitrary opening adjustment. |
-| Q6 | Are full reversals enough, and must reverse-plus-replacement be one atomic action? | Full reversals only; separate commands initially, with no claim of bundled atomicity. |
-| Q7 | What key namespace, idempotency/audit retention, and user-erasure policy are required? | Owner-wide financial keys; retain evidence with journal lifetime; no silent TTL that weakens replay guarantees. |
-| Q8 | Is one trusted posting adapter sufficient, or must the database defend against other INSERT writers? | Trusted adapter plus append-only role initially; stored-procedure-only writes if the threat model requires stronger enforcement. |
+| Increment | Exit evidence |
+| --- | --- |
+| 1: pure Domain, this task | Local factories/value objects and immutability; no data/balance/correction service |
+| 2: isolated SQL feasibility | Exact decimal/date materialization, independent connections and least-privilege roles |
+| 3: additive schema/projection | Ownership keys, revision chains, positive amounts, one reversal and batch metadata |
+| 4: controlled writer | Atomic outcomes/audit, scoped replay, locks and no partial batches |
+| 5: openings/corrections | Zero metadata, expected revisions, replacement/net-balance rollback |
+| 6: income/expense/transfer/reversal | Overspending races, conservation and archived exception |
+| 7: HTTP/reconciliation | Cookie/CSRF/BOLA, consistent reads, diagnosis and fault injection |
 
-Other risks: aggregate-query cost as history grows, SQL Express capacity, hot-account serialization, lock escalation/deadlocks, clock regressions, oversized numbers at browser boundaries, production key management, and future category/reporting semantics. Measure before introducing balance projections, distributed infrastructure, or a full ledger.
+ADR acceptance closes the architecture decisions, not future SQL verification. No new schema or financial endpoint is authorized by this increment. /health remains independent of SQL.
 
-## 17. Validation of this design task
+Run restore/build and pure-domain/ordinary regressions. SQL opt-in tests that write remain disabled to honor the instruction not to alter SQL Server; their previous results are not re-certified.
 
-Repository code, docs, mappings, and relevant tests were inspected. Official SQL Server, EF, and .NET sources were consulted for numeric and concurrency behavior. A read-only local BCL numeric probe was run; no SQL connection or database mutation was needed.
+Actual increment-1 validation: restore succeeded; build completed with zero warnings/errors; 126 unit tests passed, including 54 new financial cases; 29 existing integration tests passed, including /health. The runner skipped 32 opt-in SQL tests. No migration, SQL write or financial HTTP call was executed.
 
-This task creates only this document and ADR-002. It does not run restore/build/test or claim new passing financial tests, and it does not alter existing domain/migration/configuration files. Future guarantees remain design obligations until implemented and demonstrated with the tests above.
+References: [SQL locks](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide?view=sql-server-ver15), [application locks](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sp-getapplock-transact-sql?view=sql-server-ver15), [EF transactions](https://learn.microsoft.com/en-us/ef/core/saving/transactions), [commit ambiguity](https://learn.microsoft.com/en-us/ef/core/miscellaneous/connection-resiliency).

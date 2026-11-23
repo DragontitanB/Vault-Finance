@@ -2,9 +2,9 @@
 
 ## Status and conventions
 
-Money and Account are implemented in Domain without changes to their existing behavior. Infrastructure persists Account and Identity users. Application/API now support owned account creation, listing, detail, rename, and archive. Transaction, Category, Budget, Transfer, AuditEntry, balances, and all monetary operations remain future proposals.
+Money and Account retain their existing behavior. Domain now also implements immutable financial operation descriptors and bounded magnitudes as described below. Infrastructure persists only Account and Identity users; the financial descriptors have no mappings or endpoints. Application/API support owned account creation, listing, detail, rename, and archive. Category, Budget, AuditEntry, financial persistence, balances, and posting workflows remain future work.
 
-Account uses opaque, caller-supplied, non-empty Guid identifiers for Id and UserId. The entity does not generate identifiers or verify that a User exists. Proposed future event timestamps use UTC; transaction dates and budget months represent user-facing calendar concepts and need an explicit timezone policy before implementation.
+Account uses opaque, caller-supplied, non-empty Guid identifiers for Id and UserId. The entity does not generate identifiers or verify that a User exists. Financial timestamps are UTC with America/Santo_Domingo accounting dates. The future trusted writer selects current timestamps; users cannot backdate operations in the MVP.
 
 ## User
 
@@ -26,7 +26,7 @@ Implemented as a sealed entity in `VaultFinance.Domain.Accounts`. Its current co
 
 The earlier proposal included a descriptive type, opening balance, and opening date. These remain deferred to respect the current scope. There are no deposits, withdrawals, transfers, mutable balances, persistence constructors, or ORM dependencies.
 
-The future balance will be derived from an opening balance, income, expenses, and transfer legs. Negative balances may be valid; overdraft rules are not assumed. Future writes must respect the archive state. Do not introduce a persisted balance cache until a demonstrated need and consistency strategy exist.
+The future balance derives from complete committed journal batches, including openings, income, expenses, transfers and exact compensations. Negative balances and credit accounts are forbidden. Ordinary activity requires Active accounts; the controlled reversal exception for archived accounts must also preserve nonnegative balances. There is no persisted balance cache.
 
 The earlier one-reporting-currency-per-user proposal is superseded: one user may own multiple accounts in different currencies, DOP and USD. The Accounts.UserId foreign key enforces owner existence in persistence, with deletion restricted while accounts exist. Account authorization is now enforced separately: the server supplies UserId from the authenticated identity, and every existing-resource query/update scopes by owner and Id. A foreign key alone is not authorization.
 
@@ -40,11 +40,11 @@ Accounts stores Id/UserId as uniqueidentifier, Name as nvarchar(100), Currency a
 
 ## Transaction
 
-Represents an income or expense entry. Proposed information: Id, UserId, AccountId, CategoryId, kind, positive Money magnitude, effective date, optional description, and creation/update timestamps.
+Income and Expense are now kinds of the immutable FinancialOperation descriptor. Their future posting/reporting workflows and Category linkage are not implemented; no separate mutable Transaction entity is introduced.
 
-Account and Category must belong to the same User. Category kind must match transaction kind. Money currency must match the account currency; no single user-level currency is imposed. A transaction predates neither its account's opening date nor other lifecycle constraints established later.
+Future Category linkage must match owner and income/expense kind. Operation currency matches the account currency; no single user-level currency is imposed. Posting requires an explicitly initialized account and a trusted current recording date.
 
-Income increases the account balance and expense decreases it. Changes and deletions will update derived totals and produce an audit record. Transfers are modeled separately to prevent counting them as income or expense.
+Income increases the derived balance and expense decreases it. Confirmed operations cannot be edited or deleted; full compensations preserve originals and their historical dates. Transfers do not count as income or expense.
 
 ## Category
 
@@ -62,13 +62,13 @@ Allow at most one budget per user, category, month, and currency. Actual spendin
 
 Represents one movement between distinct owned accounts. Proposed information: Id, UserId, source AccountId, destination AccountId, positive Money amount, effective date, optional description, and timestamps.
 
-Both accounts must be active, belong to the same user, and use the same currency. The source decreases and destination increases by the same amount in one database transaction. A transfer has no income/expense category and must not be counted in spending reports. Whether persistence stores one transfer row or linked ledger legs remains a later decision.
+Both accounts must be active, distinct, belong to the same user, and use the same currency. The immutable Transfer descriptor stores both participants and one positive magnitude. Future persistence posts it atomically, with equal opposite derived effects and no income/expense category. There are no independently writable transfer legs.
 
 ## AuditEntry
 
 Records a relevant action on a resource. Proposed information: Id, actor UserId where applicable, action, resource type and identifier, UTC timestamp, correlation identifier, and a minimal approved change summary.
 
-Audit data is append-only through application behavior. Financial writes and their audit entries should commit atomically. Do not include passwords, cookies, tokens, or unrestricted request bodies. Retention, account erasure, system actors, and administrator access require an explicit policy before implementation.
+Future financial audit is append-only, commits with the operation batch and idempotency outcome, and is retained for the MVP lifetime. Do not include passwords, cookies, tokens, or unrestricted request bodies. Account erasure, system actors, and administrator access need a separate lifecycle design; there is no MVP history-erasure workflow.
 
 ## Money
 
@@ -83,7 +83,41 @@ Implemented as a sealed record in `VaultFinance.Domain.ValueObjects`, constructe
 - No arbitrary business maximum is imposed beyond decimal representability. Near its numeric limits decimal arithmetic can round without throwing; inverse-operation checks reject that loss of exactness. A representable input does not guarantee that every calculation involving it is representable.
 - Ordering, multiplication/division, exchange rates, currency conversion, formatting policy, and serialization contracts are not implemented.
 
-Currency validation is shared through an internal CurrencyCode helper, so Account and Money cannot diverge. This is not a public currency abstraction. Money is not a property of Account and is not mapped as an EF entity, separate table, or invented balance column. Its existing decimal range and arithmetic rules remain unchanged. Future monetary properties need an explicit column/conversion strategy that preserves that range and two-decimal rule; decimal(18,2) would narrow it and is not silently adopted here.
+Currency validation is shared through an internal CurrencyCode helper, so Account and Money cannot diverge. This is not a public currency abstraction. Money is not a property of Account and is not mapped as an EF entity, separate table, or invented balance column. Its decimal range and arithmetic rules remain unchanged. FinancialAmount deliberately narrows positive posting magnitudes to the decimal(28,2) range; a generic full-range Money must not silently be mapped to that narrower column.
+
+## Financial operation primitives: implemented Domain only
+
+[ADR-002](decisions/ADR-002-financial-operation-journal.md) accepts an immutable operation journal with derived balances. See the [complete contracts and SQL obligations](financial-engine-design.md).
+
+- FinancialAmount is a sealed value record wrapping unchanged Money. It requires 0 < Amount <= 99999999999999999999999999.99, two effective decimal places, DOP/USD and value equality.
+- FinancialPostingContext is a sealed value record with a non-empty BatchId, a non-default zero-offset DateTimeOffset, and an effective date derived in America/Santo_Domingo. It does not read the clock or prove that a supplied instant is current.
+- FinancialOperationKind defines Opening, Income, Expense, Transfer and Reversal. FinancialOperationStatus defines Confirmed only.
+- FinancialOperation is a sealed immutable entity with validated factories, non-empty Id/UserId, account IDs, currency, recording context and a trimmed reason of at most 200 UTF-16 code units. Ordinary operations carry a FinancialAmount and use Active, owned, matching-currency account snapshots.
+- Opening credits its destination; Income credits its destination; Expense debits its source; Transfer has distinct source/destination IDs. Opening requires a reason.
+- Reversal references the original ID/kind with no copied amount/account fields. It requires the same owner, a reason, distinct operation/batch IDs and a timestamp not before the original. Reversing a reversal is forbidden. Creating a descriptor does not mutate its original or prove that another reversal was not already posted.
+- There are no setters, init setters, public entity constructors, or mutable confirmation/reversal transitions. Confirmed describes the immutable representation; SQL commit is a separate future guarantee.
+
+Zero initialization is future audited opening-version metadata, not a zero monetary operation. Opening correction will append a full reversal and positive replacement (when needed) in one atomic batch and advance the opening revision.
+
+No opening-version entity, balance calculator, funds check, idempotency store, transfer/correction coordinator, financial data access or financial API is implemented. Global uniqueness, initialization, current owner/status, funds and indivisible confirmation must be checked by the future controlled SQL writer.
+
+```csharp
+using VaultFinance.Domain.FinancialOperations;
+using VaultFinance.Domain.Accounts;
+using VaultFinance.Domain.ValueObjects;
+
+var ownerId = Guid.NewGuid();
+var cash = new Account(Guid.NewGuid(), ownerId, "Cash", "DOP");
+var posting = new FinancialPostingContext(
+    Guid.NewGuid(), new DateTimeOffset(2026, 11, 23, 15, 0, 0, TimeSpan.Zero));
+var income = FinancialOperation.CreateIncome(
+    Guid.NewGuid(), ownerId, cash, new FinancialAmount(new Money(100m, "DOP")), posting);
+var compensation = FinancialOperation.CreateReversal(
+    Guid.NewGuid(), ownerId, income,
+    new FinancialPostingContext(Guid.NewGuid(), posting.RecordedAtUtc.AddMinutes(1)),
+    "Correct a simulated entry");
+// Immutable descriptors only: neither construction moves funds or persists data.
+```
 
 ## Usage examples
 
@@ -107,4 +141,4 @@ Adding `new Money(1m, "DOP")` to `original` throws DomainException. Creating `ne
 
 ## Persistence and concurrency decisions still required
 
-Account mappings, indexes, constraints, and ownership relationship are implemented in Infrastructure, together with VaultFinanceDbContext and the initial migration. Monetary-property SQL precision, optimistic concurrency, deletion lifecycle, balance queries, and idempotency storage remain future work. Domain still has no framework or project dependencies. There are no repositories, financial workflows, or persisted balances. User ownership must still be authorized by future use cases.
+Account mappings, indexes, constraints, and ownership relationship are implemented in Infrastructure, together with VaultFinanceDbContext and the initial migration. Financial mappings, bounded decimal round trips, the controlled writer, locking, balance queries and persistent idempotency remain future implementation and verification work under ADR-002. Domain has no framework/project dependencies. Existing account use cases authorize ownership; financial descriptor checks do not replace future resource authorization or locked SQL revalidation.

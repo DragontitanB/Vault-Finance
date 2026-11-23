@@ -43,14 +43,20 @@ Iteration 5 implements authenticated account creation, owner-only listing/detail
 1. Personal identity: register, log in, and log out through ASP.NET Core Identity and secure cookie sessions.
 2. Accounts: create and rename owned accounts, record an opening balance, and archive accounts without losing history.
 3. Categories: manage owned income and expense categories and archive referenced categories.
-4. Transactions: record, list, filter, correct, and delete owned income and expense entries; calculate balances consistently.
+4. Transactions: record, list and filter owned income/expense operations; correct through full compensating reversals, never editing/deleting confirmed history. Opening corrections atomically reverse and replace while preserving history.
 5. Transfers: move money atomically between two active accounts owned by the same user, without classifying the movement as income or expense.
 6. Budgets: set monthly spending limits per expense category and report actual spending against those limits.
 7. Summary: expose basic balances, income, expense, and budget totals through the backend. A React and TypeScript dashboard will consume these endpoints in a later iteration.
 8. Accountability: audit relevant changes and protect retryable financial write operations with idempotency.
 9. Persistence: extend the implemented EF Core/SQL Server schema and database-backed integration tests as financial use cases arrive.
 
-One user may own accounts in different currencies: DOP and USD. This supersedes the original single-reporting-currency proposal. Future transactions must use their account's currency; transfers require equal currencies. Summaries and budgets must keep currencies separate without implicit conversion. Money retains two effective decimal places and its existing decimal range; monetary-property SQL precision is deferred because no persistent property currently uses Money.
+One user may own accounts in different currencies: DOP and USD. This supersedes the original single-reporting-currency proposal. Future transactions must use their account's currency; transfers require equal currencies. Summaries and budgets must keep currencies separate without implicit conversion. Money retains two effective decimal places and its signed decimal range. The accepted financial contract bounds positive operation magnitudes to decimal(28,2); future persistence must prove exact round trips.
+
+## Accepted financial architecture and current increment
+
+[ADR-002](decisions/ADR-002-financial-operation-journal.md) and the [financial engine design](financial-engine-design.md) govern the immutable journal and derived balances. No overdrafts, credit accounts, negative openings, user backdating or partial reversals. Recording uses UTC and America/Santo_Domingo accounting dates. Reversal is full and at most once per original; archived-account reversals require a controlled exception preserving nonnegative balances.
+
+The current increment implements only bounded FinancialAmount, FinancialPostingContext, operation kind/status and immutable FinancialOperation factories with direct Domain tests. It adds no persistence, financial endpoints, balances or posting services. Explicit zero opening revisions, atomic opening correction, lifetime owner/type/key idempotency, audit, deterministic account locks and the single transactional writer remain future work. Domain construction alone does not establish their SQL guarantees.
 
 ## Quality requirements
 

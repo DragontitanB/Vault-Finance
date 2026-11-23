@@ -2,7 +2,9 @@
 
 ## Current structure
 
-Vault Finance is a modular monolith using Clean Architecture: one deployable API and inward-facing compile-time dependencies. Domain implements Money and Account. Application owns authentication contracts and account use cases/contracts. Infrastructure implements Identity authentication and the account persistence port using EF Core SQL Server. API owns HTTP endpoints, ProblemDetails mapping, CSRF enforcement, and rate limiting. Account management is implemented; balances and monetary operations are not.
+Vault Finance is a modular monolith using Clean Architecture: one deployable API and inward-facing compile-time dependencies. Domain implements Money, Account and immutable financial operation primitives. Application owns authentication contracts and account use cases/contracts. Infrastructure implements Identity authentication and the account persistence port using EF Core SQL Server. API owns HTTP endpoints, ProblemDetails mapping, CSRF enforcement, and rate limiting. Account management is implemented; financial posting, persistence and balances are not.
+
+[ADR-002](decisions/ADR-002-financial-operation-journal.md) accepts the immutable operation journal and [derived balance/writer contract](financial-engine-design.md). Current additions are Domain-only: FinancialAmount, FinancialPostingContext, kind/status enums and sealed FinancialOperation factories. No new references, mappings, services or endpoints are introduced. The future transactional SQL writer must enforce funds, global reversal uniqueness, atomic correction/transfer and lifetime owner/type/key idempotency; immutable construction alone cannot prove these guarantees.
 
 | Layer | Responsibility | Allowed direct dependencies |
 | --- | --- | --- |

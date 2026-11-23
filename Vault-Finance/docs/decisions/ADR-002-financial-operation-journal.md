@@ -1,88 +1,56 @@
-# ADR-002: Use an Immutable Operation Journal for the Financial MVP
+# ADR-002: Immutable Financial Operation Journal and Derived Balances
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-23
-- Scope: Future financial engine only; no implementation or database change
-- Detailed design: [Financial Engine Design](../financial-engine-design.md)
+- Scope: Accepted MVP architecture; only pure Domain increment 1 implemented now
+- Contract: [Financial Engine Design](../financial-engine-design.md)
 
-## Context
+## Decision
 
-Vault Finance is a simulated personal-finance modular monolith with Clean Architecture, .NET 10, SQL Server 2019 Express, Identity cookies, CSRF, Money, and owner-scoped Account management. It has no financial operations or balances yet.
+Use an immutable canonical operation journal with derived per-account balances, not full double-entry accounting. Transfer is one positive magnitude with two distinct owned same-currency accounts; reversal references its immutable original and derives its exact inverse.
 
-The first engine needs auditable opening balances, income, expenses, same-owner/same-currency transfers, reversals, idempotency, and protection against concurrent overspending. It does not need banking settlement, custody, FX, liabilities, split accounting, or full financial statements.
+Preserve Money and Account. Monetary operation magnitudes are 0.01 through 99999999999999999999999999.99, compatible with decimal(28,2). Generic Money retains its wider signed/zero contract. No overdrafts, credit accounts or negative openings.
 
-Current future documents allow transaction correction/deletion and do not decide overdraft policy. Money supports a wider range than common fixed-scale SQL mappings. These points must be reconciled before programming; this ADR does not amend them silently.
+Record UTC instants and derive current effective dates in America/Santo_Domingo. No user-selected historical dates or scheduling.
 
-## Options
+A posting batch is indivisible. Opening correction can append a full compensation and replacement together, validating the final balance rather than an uncommitted component prefix.
 
-### A. Full double-entry ledger
+Confirmed operations cannot be edited/deleted. There is no mutable reversed flag or Draft/Pending workflow. Confirmed is the immutable domain representation, not proof of SQL durability, funds or uniqueness.
 
-An immutable journal entry contains two or more debit/credit postings against user-visible and counterpart ledger accounts, balanced per currency.
+## Resolved contradictions
 
-Advantages are a complete accounting equation and a natural path to liabilities, equity, splits, and accounting reports. Costs are counterpart-account semantics, additional records/mappings, cross-row balancing enforcement, and more concepts than the current product requires.
+- Replace the proposed one-Opening-forever index with immutable opening revisions: one root and a predecessor-linked history.
+- A zero opening/replacement is an audited revision with no zero-valued financial operation.
+- Positive opening correction uses one atomic batch/result/audit. Opening 100 corrected to 80 after spending 80 has final balance zero despite its compensation subtotal.
+- Ordinary activity requires Active accounts. Archived accounts permit exact compensations if final balances remain nonnegative; positive replacement requires Active status.
+- Idempotency is (owner, server-selected command type, key), not the old owner-wide scope. Identical retries replay; changed payload within a scope conflicts.
+- Retain keys/fingerprints/results and audit for the MVP lifetime.
+- All financial writes use one permission-hardened transactional writer; runtime direct financial DML is not an alternative.
 
-Double entry still requires resource authorization, atomic writes, idempotency, and a funds/concurrency policy; debit/credit equality alone provides none of those guarantees.
+These are closed architecture decisions. Provider mappings, constraints, procedure/role behavior and native concurrency still require subsequent evidence. None are implemented now.
 
-### B. Canonical operation journal with derived balances
+## Future SQL guarantees
 
-A confirmed operation row identifies its owner/currency and one source, one destination, or both, with a shared magnitude. A read-only movement projection derives signed effects. A reversal references a non-reversal original and derives its exact inverse.
+The writer obtains trusted owner identity, locks account anchors deterministically, reads fresh balances afterward, enforces initialization/current opening revision and at-most-one full reversal, and checks every affected final balance within [0, Bmax].
 
-Advantages are fewer authoritative records, structurally atomic transfers, explicit external income/expense semantics, rebuildable balances without a cache, and compatibility with the existing Account model.
+Components, revision, outcome and audit commit together. Reads/reconciliation use complete batches, never intermediate component cutoffs.
 
-The limitation is deliberate: it is an operation journal, not a general ledger. Full accounting capabilities require a later explicit design/migration.
+Composite FKs, CHECKs, uniqueness and permissions complement Domain/Application validation. They do not independently establish complete batch/audit membership or authenticate an HTTP user. A compromised service identity/sysadmin remains outside these guarantees.
 
-## Proposed decision
+Idempotency provides at most one committed result per owner/type/key, not exactly-once external delivery. Resolve ambiguous commit using the same scope and a fresh connection.
 
-Choose B for the MVP.
+## Domain increment authorized now
 
-1. Persist only confirmed immutable operations: opening, income, expense, transfer, and full reversal.
-2. Store a transfer as one canonical row; never post independent source/destination transactions.
-3. Derive movements and balances; do not maintain a mutable balance field or independent movements table initially.
-4. Use owned/currency composite foreign keys, row-shape checks, one-opening uniqueness, and one-full-reversal uniqueness.
-5. Represent reversals by immutable original references rather than client-editable copies of amount/accounts.
-6. Commit operation, final idempotency outcome, and audit evidence within one explicit SQL transaction.
-7. Serialize the owner/key with a transaction-owned SQL application lock; serialize participating account anchors in deterministic order before reading balance and status.
-8. Preserve existing authentication, CSRF, owner-scoped 404 behavior, Clean Architecture dependencies, and /health independence.
-9. Keep business rules in Domain/Application and SQL transaction/locking details in Infrastructure; no generic repository or extra distributed component.
+Implement FinancialAmount, immutable FinancialPostingContext, kind/status enums and sealed FinancialOperation factories for Opening, Income, Expense, Transfer and Reversal.
 
-The complete schema, protocol, examples, guarantees, and test matrix are in the design document. No entities, migrations, or endpoints are authorized by this ADR alone.
+Validate positive/range/precision/currency, IDs, account snapshots, UTC/calendar metadata and local reversal causality. Creating a reversal never mutates its original or proves global uniqueness.
 
-## Guarantees and limitations
+No balance calculator, posting/correction/transfer coordinator, data access, migrations, financial endpoints or new packages.
 
-The one-row transfer and fixed projection cannot contain a separately committed transfer half. Referencing an immutable original allows an exact inverse without duplicating monetary fields.
+## Alternatives and consequences
 
-Nonnegative/bounded balances depend on the shared account-lock protocol and fresh balance read, not merely on a SQL transaction, RCSI, AsNoTracking, or an Account rowversion. All financial writers must comply. SQL constraints separately enforce ownership/currency and structural uniqueness.
+Full double entry is deferred until liabilities, splits, counterpart accounts or accounting statements justify it. Independent transfer rows, mutable balances as sole truth, editing/deleting confirmed history, event sourcing, distributed locks and generic repositories are not selected.
 
-Idempotency is an at-most-one committed financial effect per authenticated owner/key with durable replay evidence. It is not exactly-once external delivery. Unknown commit outcomes must be resolved using the same key on a fresh connection.
+Batch/revision concepts are necessary for approved atomic opening replacement and explicit zero initialization. They are future persistence contracts, not extra Domain entities implemented speculatively here.
 
-Append-only runtime permissions limit ordinary mutation but do not protect against a sysadmin or an INSERT writer bypassing the posting protocol. If that threat is in scope, permission-hardened stored-procedure-only writes are required before exposure.
-
-There is no stored balance to drift, but projections and reporting can still be wrong. Independent snapshot reconciliation and real SQL concurrency/failure tests are mandatory.
-
-## Pending policy and numeric decisions
-
-The recommendation remains Proposed until Q1-Q8 in the detailed design are settled:
-
-- Explicit decimal(28,2) financial-command/balance bounds versus preserving the full existing Money range. decimal(18,2) must not be adopted silently; decimal(31,2) alone is not proof of safe CLR conversion.
-- No-overdraft funded-account policy versus negative openings/credit accounts.
-- Accounting timezone, current-date-only behavior, and historical/backdated reporting requirements.
-- Exact reversals on archived accounts and visibility of nonzero archived balances.
-- Opening correction beyond its full cancellation, and whether correction bundles must be atomic.
-- Durable key/audit retention, user erasure, and strength of the trusted-writer boundary.
-
-Money and Account remain unchanged. These are future operation policies, not claims about current domain invariants.
-
-## Alternatives deferred or rejected
-
-- Full double entry: deferred until an actual accounting requirement justifies counterpart semantics.
-- Two unrelated transfer rows: rejected because grouping, conservation, and retry safety become extra failure surfaces.
-- Mutable Account.Balance as the sole truth: rejected because it loses independently reconstructable history.
-- Synchronously maintained balance cache/guard: deferred until aggregate cost is measured and rebuild/reconciliation is designed.
-- Editing/deleting confirmed movements: rejected in favor of compensations.
-- Event sourcing, microservices, Redis locks, queues, and mediator/repository frameworks: unnecessary for one SQL-backed modular monolith.
-
-## Consequences and revisit conditions
-
-The MVP has a compact, auditable source of truth and per-account serialized writes. It also has explicit limits: hot-account contention, aggregate-read cost, full reversals only, bounded numeric/date policies pending approval, and no full general-ledger reporting.
-
-Adopt a new ADR if liabilities, split entries, external accounting integration, independent financial writers, or measured scale needs change those tradeoffs. A later ledger migration must retain provenance, idempotency identities, balances, and reversal history rather than rewriting existing facts.
+Known costs are serialized hot-account writes, aggregate reads, constraints/roles, and no partial reversals or user backdating. Revisit with a new ADR when requirements change; representation migration must preserve provenance, receipts, balances and reversal history.

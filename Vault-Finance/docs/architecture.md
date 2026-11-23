@@ -2,7 +2,7 @@
 
 ## Current structure
 
-Vault Finance is a modular monolith using Clean Architecture: one deployable API and inward-facing compile-time dependencies. Domain implements Money, Account, AccountStatus, and explicit domain errors. Infrastructure implements EF Core SQL Server persistence and ASP.NET Core Identity stores. Application has no use cases yet. No financial or authentication endpoints are implemented.
+Vault Finance is a modular monolith using Clean Architecture: one deployable API and inward-facing compile-time dependencies. Domain implements Money and Account. Application owns authentication contracts/outcomes and the IAuthenticationService port. Infrastructure implements the port through Identity alongside EF Core SQL Server persistence. API owns HTTP endpoints, ProblemDetails mapping, CSRF enforcement, and rate limiting. No financial endpoints are implemented.
 
 | Layer | Responsibility | Allowed direct dependencies |
 | --- | --- | --- |
@@ -21,9 +21,15 @@ There are no dedicated module assemblies, module loading mechanisms, inter-modul
 
 ## HTTP foundation
 
+Authentication routes are explicitly mapped under /api/v1/auth: register, login, logout, me, and csrf. No default Identity endpoint set is mapped. Application credential DTOs contain no framework types; Identity types and storage remain in Infrastructure. The Identity adapter is the implementation of these concrete use cases, rather than a generic repository or mediator layer.
+
+Registration returns 201 without signing in. Login returns 200 and a secure non-persistent cookie. Logout returns 204 and removes the browser session. /me returns only Id/Email. An anonymous CSRF bootstrap supports registration/login protection; the token must be refreshed after identity transitions. No JWT is returned.
+
 The API uses minimal endpoints. GET /health calls a small typed handler and returns HTTP 200 with {"status":"ok"}. It is explicitly anonymous and short-circuits routing after HTTPS redirection, before authentication/authorization/antiforgery middleware. Even an attached authentication cookie must not trigger Identity stamp validation or a SQL query for health. No database checks or dependency readiness claims exist.
 
 HTTPS redirection is enabled. The local https launch profile binds ports 7143 and 5102 and selects Development. OpenAPI JSON is mapped only in Development at /openapi/v1.json; no documentation UI is installed.
+
+The explicit pipeline places rate limiting before authentication, then the global /api CSRF guard before authorization and framework antiforgery. All matched unsafe API methods require the configured header/cookie pair, including anonymous routes. ProblemDetails handles validation, authentication, conflict, CSRF, throttling, and unexpected errors without exposing internals. Authentication responses are no-store. Production HSTS is enabled, and current Kestrel request bodies are limited to 16 KiB.
 
 ## Configuration
 
@@ -63,7 +69,7 @@ The script is deliberately limited to this initial schema, not a general product
 
 ## Deferred implementation
 
-Identity stores, secure application-cookie options, antiforgery services, and middleware are registered. No routes issue cookies or antiforgery tokens. Authentication flows, financial resource authorization, endpoint-specific CSRF enforcement, application use cases, production Data Protection key management, concurrency controls, idempotency, audit persistence, React, and TypeScript remain deferred.
+Registration, cookie login/logout, current-user lookup, CSRF bootstrap/enforcement, Identity password policy, temporary lockout, and process-local rate limiting are implemented. Financial resource authorization/use cases, email confirmation/recovery/MFA, global session revocation, production Data Protection key storage, distributed abuse protection, concurrency controls, idempotency, audit persistence, React, and TypeScript remain deferred.
 
 Use direct, explicit use-case composition first. Add a port only when a real application use case needs an external capability. Do not add generic repositories, speculative service layers, messaging infrastructure, caching, or mediator packages.
 

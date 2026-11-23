@@ -6,7 +6,7 @@ Vault Finance is a personal finance portfolio project focused on .NET backend ar
 
 The project provides a .NET 10 solution, Clean Architecture, Money and Account domain types, EF Core 10 SQL Server persistence, and ASP.NET Core Identity stores with Guid keys. The API exposes process liveness and development-only OpenAPI. Application has no financial use cases yet.
 
-The initial schema stores Identity users and accounts. Secure application-cookie and antiforgery settings are prepared, but no registration/login/logout, account CRUD, token-issuance, or financial endpoints exist. There are no account balances, deposits, withdrawals, transactions, transfers, budgets, dashboards, or frontend. Domain Money and Account were not modified for persistence.
+The API implements registration, cookie login/logout, current-user lookup, and CSRF bootstrap. Identity owns password validation/hashing, normalization, and temporary lockout. There are no account CRUD endpoints, account balances, deposits, withdrawals, transactions, transfers, budgets, dashboards, or frontend. Domain and the applied persistence migration remain unchanged.
 
 ## Prerequisites
 
@@ -97,7 +97,61 @@ try {
 
 The SQL fixture permits only local SQLEXPRESS/VaultFinanceDb with Windows authentication and refuses pending migrations. Each test starts a transaction, uses synthetic Guid identities and example.invalid names, and rolls back on disposal, including on assertion failure. Tests never migrate, create/drop databases, or delete existing records for cleanup.
 
-Verified on the local SQL Server 2019 Express instance: restore succeeded; build had zero warnings/errors; all 72 unit and 22 integration test cases passed with SQL tests enabled and no skips. Database verification found compatibility 150, the initial history record at version 10.0.15, and zero rows in all eight application tables after the tests.
+Authentication HTTP tests use WebApplicationFactory with the real SQL provider and a shared transaction across the request scopes of each test. Passwords and email addresses are generated synthetically; every test rolls back, including on failure. The test-only Data Protection provider is ephemeral and does not replace production key storage or certificate validation.
+
+Verified on local SQL Server 2019 Express: restore succeeded; build had zero warnings/errors; all 72 unit and 48 integration test cases passed with SQL tests enabled and no skips. The database still has the initial migration only, with zero users/accounts after the tests. No model change or new migration was required.
+
+## Authentication and CSRF
+
+| Endpoint | Success | Requirements |
+| --- | --- | --- |
+| POST /api/v1/auth/register | 201 with id/email; no automatic login | Anonymous CSRF pair; 3 requests/minute/IP |
+| POST /api/v1/auth/login | 200 with id/email; secure session cookie | CSRF pair; 5 requests/minute/IP |
+| POST /api/v1/auth/logout | 204; browser cookie removed | Authentication and fresh identity-bound CSRF pair |
+| GET /api/v1/auth/me | 200 with id/email only | Authentication; otherwise 401 |
+| GET /api/v1/auth/csrf | 200 with a request token | Same browser cookie jar; anonymous or authenticated |
+
+Get /csrf first, retain its JSON token in memory, and send X-CSRF-TOKEN on every mutation using the same browser cookie jar. Fetch /csrf again after login and logout: the token is tied to the current identity, and those transitions clear the antiforgery cookie. Never place credentials or session cookies in local storage.
+
+The application cookie is HttpOnly, Secure, SameSite=Lax, host-only, Path=/, and non-persistent, with a 30-minute sliding ticket lifetime. The antiforgery cookie is HttpOnly, Secure, and SameSite=Strict. All authentication responses are no-store. No JWT or permissive CORS policy is used.
+
+Registration trims email, uses Identity normalization, and rejects normalized duplicates with 409. Passwords require 15–128 characters and at least four distinct characters; long passphrases are supported. Login failures use a generic 401 for unknown users, incorrect passwords, and locked accounts. Ten failures cause a short one-minute account lockout. Rate limiting is per process and direct transport IP; distributed abuse and production proxy configuration require additional deployment controls.
+
+Errors use ProblemDetails: 400 for validation/CSRF, 401 for failed authentication, 409 for duplicate email, and 429 for rate limiting. A CSRF failure includes code invalid_csrf_token; login failure includes invalid_credentials. Duplicate registration intentionally has a distinct conflict response. Email confirmation, recovery, MFA, global session revocation, and financial resource authorization remain future work.
+
+Every matched mutating /api route is protected by the global CSRF guard, including anonymous registration/login. Future endpoints must remain under /api, explicitly require authorization where appropriate, and add missing/invalid/valid token tests. The guard does not rely on form metadata or a frontend convention.
+
+### Reproducible HTTPS requests without saved credentials
+
+Start the API as described below. This PowerShell example uses one cookie jar, prompts for a new synthetic password, and keeps passwords/tokens in memory rather than files or literal command history. It creates one disposable example.invalid user; unlike the automated suite, manual requests persist that user. Do not use real credentials.
+
+```powershell
+$base = 'https://localhost:7143/api/v1/auth'
+$email = 'demo-' + [Guid]::NewGuid().ToString('N') + '@example.invalid'
+$securePassword = Read-Host 'New demo passphrase (15-128 characters, 4 distinct)' -AsSecureString
+$password = [Net.NetworkCredential]::new('', $securePassword).Password
+$body = @{ email = $email; password = $password } | ConvertTo-Json
+
+$csrf = Invoke-RestMethod -Uri "$base/csrf" -SessionVariable browser
+$headers = @{ 'X-CSRF-TOKEN' = $csrf.token }
+$registered = Invoke-RestMethod -Uri "$base/register" -Method Post -WebSession $browser -Headers $headers -ContentType 'application/json' -Body $body
+$signedIn = Invoke-RestMethod -Uri "$base/login" -Method Post -WebSession $browser -Headers $headers -ContentType 'application/json' -Body $body
+
+# Refresh after the identity changed. Do not print the token or cookies.
+$csrf = Invoke-RestMethod -Uri "$base/csrf" -WebSession $browser
+$headers = @{ 'X-CSRF-TOKEN' = $csrf.token }
+$me = Invoke-RestMethod -Uri "$base/me" -WebSession $browser
+$me | Select-Object id, email
+
+Invoke-WebRequest -Uri "$base/logout" -Method Post -WebSession $browser -Headers $headers -UseBasicParsing | Out-Null
+$csrf = Invoke-RestMethod -Uri "$base/csrf" -WebSession $browser
+$password = $null
+$body = $null
+$headers.Clear()
+$securePassword.Dispose()
+```
+
+A new browser session without cookies receives 401 from /me. Omitting the token header or sending an old token after an identity change produces 400. No certificate-validation bypass is needed. For cookie flags and rejected-token examples without persisted demo users, run the automated integration suite.
 
 ## Run locally over HTTPS
 
@@ -158,8 +212,8 @@ docs/
 | Project | Responsibility | Direct project references |
 | --- | --- | --- |
 | Domain | Money, Account, and their business invariants | None |
-| Application | Future use cases and required ports | Domain |
-| Infrastructure | SQL Server DbContext, Account mapping, Identity stores, DI | Application, Domain |
+| Application | Authentication DTOs, outcomes, and use-case port | Domain |
+| Infrastructure | SQL Server persistence and Identity-backed authentication use cases | Application, Domain |
 | Api | HTTP endpoints and composition root | Application, Infrastructure |
 | UnitTests | Isolated Money and Account behavior checks | Domain |
 | IntegrationTests | HTTP/configuration checks and opt-in real SQL tests | Api, Infrastructure |
@@ -172,9 +226,9 @@ UnitTests no longer references Api; the health HTTP contract remains covered by 
 
 The template's `AllowedHosts: "*"` must be narrowed through deployment configuration when real hostnames are known. HTTPS listeners/certificates and trusted proxy settings must also be supplied for deployment. Local launch settings do not secure a production installation.
 
-Never place credentials or real connection strings in tracked settings files. DefaultConnection comes from API User Secrets or environment configuration. Files ignored as local settings are not automatically loaded. Identity stores, secure cookie options, and antiforgery middleware are prepared; no routes issue authentication cookies or antiforgery tokens. Future JSON mutation endpoints must explicitly enforce CSRF validation and resource authorization.
+Never place credentials or real connection strings in tracked settings files. DefaultConnection comes from API User Secrets or environment configuration. Files ignored as local settings are not automatically loaded. Authentication issues secure cookies and CSRF tokens; no request/response body logging is enabled, credential DTOs do not print their contents, and sensitive EF logging remains disabled.
 
-Local Data Protection uses the Windows profile's normal DPAPI-protected key repository. Run hosting under the same Windows identity. A restricted process may report DPAPI or key-directory access failures even though normal user hosting works; do not delete keys or weaken cookie protection as a workaround. Production requires an explicit durable key-management strategy.
+Data Protection uses application name VaultFinance and the Windows profile's normal DPAPI-protected local key repository. Run hosting under the same Windows identity. Production requires a protected durable key repository shared by instances of the same deployment, isolated by environment, with rotation, old-key retention, backup, and recovery procedures. Do not delete keys or use ephemeral production keys to mask permissions problems. Logout removes the browser cookie; it does not revoke independently copied cookies on other clients.
 
 ## Design documentation
 

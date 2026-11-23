@@ -1,5 +1,6 @@
 using VaultFinance.Api.Endpoints;
 using VaultFinance.Infrastructure;
+using VaultFinance.Api.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,19 +9,32 @@ builder.Logging.AddConsole();
 
 builder.Services.AddOpenApi();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddProblemDetails();
+builder.Services.AddAuthenticationRateLimits();
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 16_384);
 
 var app = builder.Build();
+app.UseExceptionHandler();
+app.UseStatusCodePages();
 
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+}
+
 app.UseHttpsRedirection();
 app.UseRouting();
+app.UseRateLimiter();
 app.UseAuthentication();
+app.UseMiddleware<CsrfProtectionMiddleware>();
 app.UseAuthorization();
 app.UseAntiforgery();
+app.MapAuthenticationEndpoints();
 
 app.MapGet("/health", HealthEndpoint.Handle)
     .WithName("GetHealth")

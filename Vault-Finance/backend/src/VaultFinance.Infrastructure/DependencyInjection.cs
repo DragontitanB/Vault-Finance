@@ -6,6 +6,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using VaultFinance.Infrastructure.Identity;
 using VaultFinance.Infrastructure.Persistence;
+using VaultFinance.Application.Authentication;
+using Microsoft.AspNetCore.DataProtection;
 
 namespace VaultFinance.Infrastructure;
 
@@ -33,7 +35,19 @@ public static class DependencyInjection
         });
 
         services.AddIdentity<ApplicationUser, IdentityRole<Guid>>(options =>
-            options.Stores.MaxLengthForKeys = 128)
+        {
+            options.Stores.MaxLengthForKeys = 128;
+            options.User.RequireUniqueEmail = true;
+            options.Password.RequiredLength = 15;
+            options.Password.RequiredUniqueChars = 4;
+            options.Password.RequireDigit = false;
+            options.Password.RequireLowercase = false;
+            options.Password.RequireUppercase = false;
+            options.Password.RequireNonAlphanumeric = false;
+            options.Lockout.AllowedForNewUsers = true;
+            options.Lockout.MaxFailedAccessAttempts = 10;
+            options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(1);
+        })
             .AddEntityFrameworkStores<VaultFinanceDbContext>()
             .AddDefaultTokenProviders();
 
@@ -48,13 +62,13 @@ public static class DependencyInjection
             options.SlidingExpiration = true;
             options.Events.OnRedirectToLogin = context =>
             {
-                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                return Task.CompletedTask;
+                return Results.Problem(statusCode: StatusCodes.Status401Unauthorized,
+                    title: "Authentication is required.").ExecuteAsync(context.HttpContext);
             };
             options.Events.OnRedirectToAccessDenied = context =>
             {
-                context.Response.StatusCode = StatusCodes.Status403Forbidden;
-                return Task.CompletedTask;
+                return Results.Problem(statusCode: StatusCodes.Status403Forbidden,
+                    title: "Access is forbidden.").ExecuteAsync(context.HttpContext);
             };
         });
 
@@ -69,6 +83,10 @@ public static class DependencyInjection
         });
 
         services.AddAuthorization();
+        services.AddDataProtection().SetApplicationName("VaultFinance");
+        services.Configure<PasswordHasherOptions>(options => options.IterationCount = 210_000);
+        services.AddSingleton<UnknownUserPasswordVerifier>();
+        services.AddScoped<IAuthenticationService, IdentityAuthenticationService>();
 
         return services;
     }

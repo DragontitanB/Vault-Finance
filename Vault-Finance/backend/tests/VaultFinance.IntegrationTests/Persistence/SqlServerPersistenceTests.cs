@@ -120,9 +120,9 @@ public sealed class SqlServerPersistenceTests(SqlServerFixture fixture) : IClass
         await Assert.ThrowsAsync<InvalidOperationException>(() => context.SaveChangesAsync());
     }
 
-    private static ApplicationUser CreateSyntheticUser() => new()
+    private static ApplicationUser CreateSyntheticUser()
     {
-        Id = Guid.NewGuid(),
-        UserName = $"test-{Guid.NewGuid():N}@example.invalid"
-    };
+        var email = $"test-{Guid.NewGuid():N}@example.invalid";
+        return new ApplicationUser { Id = Guid.NewGuid(), UserName = email, Email = email };
+    }
 }

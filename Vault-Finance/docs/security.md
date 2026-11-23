@@ -2,21 +2,50 @@
 
 ## Current implementation
 
-The API exposes only anonymous process liveness and development-only OpenAPI, with HTTPS redirection. Infrastructure now registers Identity EF stores with Guid keys, secure application-cookie options, antiforgery services, and authentication/authorization/antiforgery middleware. There are no registration, login, logout, token-issuance, or financial routes. No cookies or request tokens are issued by an application endpoint. Resource authorization, financial HTTP request validation, idempotency, and auditing are not implemented. Immutable UserId and a database foreign key are not proof of authenticated ownership.
+The API implements register, login, logout, current-user lookup, and CSRF bootstrap under /api/v1/auth, using ASP.NET Core Identity and cookie sessions. Domain and the applied InitialPersistence migration remain unchanged. Financial endpoints, resource authorization for financial data, idempotency, and auditing are not implemented.
 
 The sections below distinguish current preparation from controls still required before implementing authenticated financial endpoints.
 
 ## Identity and secure sessions
 
-ApplicationUser derives from IdentityUser<Guid> in Infrastructure, with official Identity EF stores. UserManager, SignInManager, and default token providers are registered; no flow uses them through an HTTP route yet. Do not implement custom password hashing or expose identity persistence types as domain entities.
+Application defines credential DTO classes, a minimal AuthenticatedUser response (Id and Email only), typed outcomes, and IAuthenticationService. Infrastructure implements its use cases through UserManager and SignInManager. API endpoints translate outcomes into HTTP responses. Credential DTOs deliberately are not records, so their generated ToString cannot disclose passwords. Domain has no Identity, EF, or HTTP dependencies.
 
-The application cookie is configured as __Host-VaultFinance with Path=/, no Domain, HttpOnly, SecurePolicy.Always, SameSite=Lax, and a 30-minute sliding lifetime. Redirect events return 401/403 instead of HTML login redirects. These settings prepare the future same-origin browser client; routes do not yet issue sessions. Session recovery, revocation, lockout policy, rate limits, and lifecycle behavior require review and tests before exposure. Do not place credentials in browser local storage.
+Register accepts a trimmed email of at most 254 characters and a 15-to-128-character password. Identity validates the email and password, normalizes email/username, salts and hashes the password, and persists the user. Password policy requires 15 characters and four distinct characters, without mandatory punctuation/case/digit rules so long passphrases are usable. Identity's own PasswordHasher uses 210,000 iterations; no custom hashing algorithm is implemented.
 
-Future API authentication failures should return appropriate 401/403 responses. Rate limits, password policy, recovery, email verification, and session lifecycle tests must be decided before exposing authentication to real users.
+RequireUniqueEmail is enabled. The registration flow always sets UserName to Email, allowing the existing unique NormalizedUserName index to reject concurrent/case-normalized duplicates without changing the applied migration. Identity duplicate results and SQL unique-key collisions both become 409 duplicate_email. NormalizedEmail itself still has the original non-unique index: future internal writers must preserve the username/email invariant or introduce a reviewed uniqueness migration before using another username scheme.
+
+Registration returns 201 with only id/email and does not sign in. Duplicate registration intentionally reveals a conflict as required by the API contract; clients may present a less specific message. Email ownership is not verified yet. Confirmation, recovery, MFA, and production abuse controls require separate flows before a public financial launch.
+
+Login uses Identity.PasswordSignInAsync with lockoutOnFailure=true and isPersistent=false. A successful response returns 200 with id/email and issues a session cookie, never a JWT. The cookie is __Host-VaultFinance with Path=/, no Domain, HttpOnly, SecurePolicy.Always, SameSite=Lax, and a 30-minute sliding ticket lifetime. No persistent browser expiry or absolute session-duration cap is configured. /me requires authentication, reloads the user through Identity, and exposes only id/email. Cookie challenges return ProblemDetails 401/403 instead of HTML redirects.
+
+Unknown users, wrong passwords, locked accounts, and disallowed logins receive the same 401 invalid_credentials response. For unknown/locked users a process-local dummy hash is verified through Identity's own hasher, reducing the obvious missing-hash timing difference. This is not a promise of constant-time HTTP responses.
+
+Logout requires authentication and CSRF, calls SignInManager.SignOutAsync, deletes the browser session cookie, and returns 204. It does not invalidate independently copied cookies on other clients or revoke every session. Identity's normal security-stamp validation remains in effect; global revocation/server-side ticket storage is future work. No tokens belong in browser local storage.
+
+## Rate limits and temporary lockout
+
+Built-in sliding-window limits apply before authentication, CSRF validation, and request handlers: five login requests and three registration requests per minute per direct transport IP, with four segments and no queue. Rejections return ProblemDetails 429, no-store, and Retry-After when supplied by the limiter. Invalid CSRF/body attempts consume the same budget.
+
+Identity temporarily locks an account for one minute after ten failed password attempts. The threshold is higher than one IP's one-minute budget, and the short lockout limits the impact of account-targeted denial. Failed CSRF checks never increment Identity's failure count. Tests verify lockout and recovery after expiry. Rate limits and lockout cannot eliminate distributed credential attacks or targeted account denial.
+
+The limiter is process-local. Reverse proxies must explicitly configure trusted forwarded headers before relying on client-IP partitioning; arbitrary forwarded/test headers are not trusted by production code. Multiple deployments require coordinated edge protection. Do not add permissive proxy trust or disable limits to make deployment work.
 
 ## CSRF and browser boundaries
 
-Antiforgery is configured with header X-CSRF-TOKEN and a __Host-VaultFinance.Antiforgery cookie using HttpOnly, SecurePolicy.Always, Path=/, and SameSite=Strict. Middleware is installed, but there is no request-token endpoint or state-changing application route. Middleware registration alone does not require antiforgery validation on every future JSON endpoint: those endpoints must explicitly validate tokens or carry the appropriate endpoint metadata. Safe GET endpoints must have no state-changing effects.
+Antiforgery uses ASP.NET Core's cookie/request-token pair, with X-CSRF-TOKEN as the required request header. The __Host-VaultFinance.Antiforgery cookie is HttpOnly, Secure, Path=/, and SameSite=Strict. JavaScript obtains the request token from the JSON body of GET /api/v1/auth/csrf, not by reading the cookie. The endpoint is anonymous so registration and login can be protected, and its response is never cached.
+
+Browser sequence:
+
+1. GET /csrf using the same browser cookie jar; retain the returned token in memory.
+2. POST /register or /login with JSON, the browser cookies, and X-CSRF-TOKEN.
+3. After successful login, fetch /csrf again: tokens are identity-bound, so the anonymous token must not be reused.
+4. POST /logout with the authenticated token, then fetch /csrf again before another anonymous mutation.
+
+Login and logout delete the browser's antiforgery cookie so the next bootstrap rotates the pair. Tests also restore the original anonymous cookie/token alongside a valid authentication cookie and confirm that Identity-bound validation rejects it.
+
+CsrfProtectionMiddleware explicitly validates every matched /api endpoint using a method other than GET, HEAD, OPTIONS, or TRACE. This includes anonymous register/login and authenticated logout, regardless of content type. Exactly one non-empty header is required; missing/invalid/mismatched tokens return ProblemDetails 400 invalid_csrf_token before handler execution. This enforces JSON protection independently of the framework's form-endpoint metadata.
+
+For every future API mutation: keep the route under /api, retain the middleware, require authorization unless explicitly reviewed as public, and add tests for missing/invalid/valid tokens. DisableAntiforgery metadata does not bypass this manual guard. External webhook/service authentication would require a separately reviewed design, not a casual exemption. Safe GET handlers must not mutate business data.
 
 SameSite cookies and CORS are not substitutes for antiforgery validation. Missing or invalid tokens must fail before mutation. Prefer same-origin hosting; if cross-origin development is needed, configure an exact origin allowlist and credentials intentionally, never a wildcard credential policy.
 
@@ -33,6 +62,8 @@ See [Microsoft's resource-based authorization guidance](https://learn.microsoft.
 ## Transport and hosting
 
 Keep HTTPS for development and production. Production must provide valid certificates, host restrictions, trusted proxy configuration where needed, and an appropriate HSTS policy. Do not enable Development in production or expose detailed errors and OpenAPI publicly by accident.
+
+The pipeline is exception/status-code handling, production HSTS, HTTPS redirection, routing, rate limiting, authentication, the API CSRF guard, authorization, and framework antiforgery. /health short-circuits after HTTPS redirection/routing and never validates Identity cookies or connects to SQL. API requests also explicitly reject non-HTTPS processing if redirection cannot be configured. Auth responses use Cache-Control: no-store, and Kestrel limits request bodies to 16 KiB in the current API.
 
 Future cookie and antiforgery configuration must explicitly require secure transport. Development certificates are local user assets and must never be committed.
 
@@ -56,10 +87,14 @@ Record relevant financial and security events with actor, resource, action, UTC 
 
 Never log passwords, authentication cookies, antiforgery tokens, connection strings, or full financial request bodies. DefaultConnection currently comes from the API's existing User Secrets or environment configuration. User Secrets is a local development convenience, not an encrypted production vault. No real connection string is stored in the repository or supplied as a CLI argument. Production credentials require a secret store/environment configuration and least-privilege database access.
 
-ASP.NET Core Data Protection currently uses the normal Windows user-profile key repository protected by DPAPI. Run local hosting under the same Windows identity; an isolated process cannot necessarily decrypt that user's keys. Do not delete keys or switch to ephemeral keys to mask that failure. Production needs an explicit durable key repository, encryption/access controls, application isolation, and a rotation/recovery policy before sessions are enabled.
+ASP.NET Core Data Protection uses application name VaultFinance and, locally, the normal Windows user-profile key repository protected by DPAPI. Run local hosting under the same Windows identity; an isolated process cannot necessarily decrypt that user's keys. Do not delete keys or switch production to ephemeral keys to mask that failure.
+
+Before deployment, configure a durable repository outside the deployment directory, encrypted at rest with a certificate or an appropriate managed key service. Restrict access to the service identity. Instances of the same deployment must share protected keys and the same application name; separate environments require separate rings. Preserve old keys needed for unexpired cookies/CSRF tokens across restarts and rotations, and define backup, recovery, compromise response, and retention policies. Losing keys invalidates sessions and request tokens. Tests use a separate ephemeral provider only for isolation, never as a production fallback.
 
 API startup never creates or migrates databases. The initial migration script checks for existing data and foreign tables, restricts writes to local VaultFinanceDb, and performs no destructive cleanup. SQL tests use synthetic identities and rollback-only transactions; they never drop databases or delete existing records.
 
 ## Planned verification
 
-Add cross-user read/write tests, unauthenticated access tests, missing/invalid CSRF token tests, cookie attribute checks, input boundary cases, concurrent duplicate request tests, rollback tests, and audit persistence tests as those features are introduced. The current health and OpenAPI tests do not verify those future protections.
+Current tests cover registration, normalized duplicate rejection, password/email validation, successful and generic failed login, temporary lockout/recovery, minimal /me responses, browser logout, cookie flags, no-cache/CORS behavior, rate limiting, missing/invalid/cross-browser/old-identity CSRF tokens, and liveness without SQL. HTTP/Identity tests use real SQL Server through WebApplicationFactory, synthetic users/passwords, one transaction per test shared across request scopes, and rollback on disposal. Existing domain and persistence tests remain.
+
+Future financial features still need cross-user resource tests, idempotency/concurrency tests, audit verification, and endpoint-specific authorization/CSRF checks. In-memory HTTP tests do not perform TLS negotiation; local HTTPS is checked separately without disabling certificate validation.

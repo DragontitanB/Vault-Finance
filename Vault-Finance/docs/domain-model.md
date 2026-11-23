@@ -8,7 +8,7 @@ Account uses opaque, caller-supplied, non-empty Guid identifiers for Id and User
 
 ## User
 
-Represents the owner of personal finance data. Infrastructure implements ApplicationUser : IdentityUser<Guid> with the standard Identity fields and EF stores. There is no separate domain User entity, reporting-currency field, profile extension, or authentication endpoint yet. The domain ownership concept remains a Guid identifier and does not inherit from IdentityUser or contain password hashes.
+Represents the owner of personal finance data. Infrastructure implements ApplicationUser : IdentityUser<Guid> with the standard Identity fields, EF stores, and registration/login/logout/current-user use cases. There is no separate domain User entity, reporting-currency field, or profile extension. Authentication HTTP responses expose only Id and Email. The domain ownership concept remains a Guid identifier and does not inherit from IdentityUser or contain password hashes.
 
 One User owns many Accounts, Categories, Transactions, Budgets, and Transfers. Referenced ownership must agree for every operation. Account closure and user/data deletion policies need a separate lifecycle decision.
 

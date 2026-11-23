@@ -36,6 +36,8 @@ This is domain behavior only. Account opening balances, opening dates, descripti
 
 ## Proposed MVP: remaining work
 
+Iteration 4 implements registration, cookie login/logout, current-user lookup, and CSRF bootstrap. Identity validates passwords and normalizes email, while the API enforces CSRF on all mutations and rate limits login/registration. No schema changes or financial endpoints were required. Email ownership verification, recovery, MFA, production session/key operations, and all financial use cases remain pending.
+
 1. Personal identity: register, log in, and log out through ASP.NET Core Identity and secure cookie sessions.
 2. Accounts: create and rename owned accounts, record an opening balance, and archive accounts without losing history.
 3. Categories: manage owned income and expense categories and archive referenced categories.

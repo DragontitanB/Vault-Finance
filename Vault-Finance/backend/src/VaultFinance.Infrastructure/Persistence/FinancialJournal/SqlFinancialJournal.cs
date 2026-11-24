@@ -16,6 +16,23 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
         ?? throw new InvalidOperationException("Financial persistence requires a configured connection.");
     private const int MaximumAttempts = 3;
 
+    public Task<FinancialTransferOutcome> RecordTransferAsync(FinancialOwner owner,
+        ValidatedFinancialTransfer transfer, CancellationToken cancellationToken) =>
+        ExecuteWriteAsync("dbo.RecordFinancialTransfer", owner, transfer.SourceAccountId, transfer.Amount,
+            transfer.Currency, transfer.Reason, transfer.IdempotencyKey,
+            (code, json) =>
+            {
+                if (code != "transfer.posted") return new FinancialTransferOutcome(Failure: Failure(code));
+                var receipt = JsonSerializer.Deserialize<FinancialTransferReceipt>(json, ReceiptOptions);
+                if (receipt is null || receipt.ReceiptVersion != 1 || receipt.SourceAccountId != transfer.SourceAccountId ||
+                    receipt.DestinationAccountId != transfer.DestinationAccountId || receipt.BatchId == Guid.Empty ||
+                    receipt.OperationId == Guid.Empty || receipt.Kind != FinancialOperationKind.Transfer ||
+                    receipt.Amount != transfer.Amount || receipt.Currency != transfer.Currency ||
+                    receipt.RecordedAtUtc.Offset != TimeSpan.Zero)
+                    return new FinancialTransferOutcome(Failure: FinancialFailure.JournalInconsistent);
+                return new FinancialTransferOutcome(receipt);
+            }, failure => new FinancialTransferOutcome(Failure: failure), cancellationToken, transfer.DestinationAccountId);
+
     public Task<OpeningOutcome> InitializeOpeningAsync(
         FinancialOwner owner, ValidatedOpening opening, CancellationToken cancellationToken) =>
         ExecuteWriteAsync("dbo.InitializeFinancialOpening", owner, opening.AccountId, opening.Amount,
@@ -60,7 +77,8 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
 
     private async Task<TResult> ExecuteWriteAsync<TResult>(string procedure, FinancialOwner owner,
         Guid accountId, decimal amount, string currency, string? reason, string key,
-        Func<string, string, TResult> decode, Func<FinancialFailure, TResult> failed, CancellationToken cancellationToken)
+        Func<string, string, TResult> decode, Func<FinancialFailure, TResult> failed, CancellationToken cancellationToken,
+        Guid? destinationAccountId = null)
     {
         bool commitMayBeUnknown = false;
         for (int attempt = 1; ; attempt++)
@@ -69,7 +87,10 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
             {
                 await using var connection = new SqlConnection(connectionString);
                 await connection.OpenAsync(cancellationToken);
-                await using var command = Procedure(connection, procedure, owner, accountId);
+                await using var command = Procedure(connection, procedure, owner, accountId,
+                    destinationAccountId.HasValue ? "@SourceAccountId" : "@AccountId");
+                if (destinationAccountId.HasValue)
+                    command.Parameters.Add("@DestinationAccountId", SqlDbType.UniqueIdentifier).Value = destinationAccountId.Value;
                 // Never round meaningful decimal digits before the SQL protocol validates them.
                 command.Parameters.Add("@AmountText", SqlDbType.NVarChar, -1).Value =
                     amount.ToString("0.00##########################", CultureInfo.InvariantCulture);
@@ -131,11 +152,12 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
         }
     }
 
-    private static SqlCommand Procedure(SqlConnection connection, string name, FinancialOwner owner, Guid accountId)
+    private static SqlCommand Procedure(SqlConnection connection, string name, FinancialOwner owner, Guid accountId,
+        string accountParameter = "@AccountId")
     {
         var command = new SqlCommand(name, connection) { CommandType = CommandType.StoredProcedure, CommandTimeout = 15 };
         command.Parameters.Add("@UserId", SqlDbType.UniqueIdentifier).Value = owner.UserId;
-        command.Parameters.Add("@AccountId", SqlDbType.UniqueIdentifier).Value = accountId;
+        command.Parameters.Add(accountParameter, SqlDbType.UniqueIdentifier).Value = accountId;
         return command;
     }
 

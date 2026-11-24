@@ -6,6 +6,24 @@ namespace VaultFinance.Application.FinancialAccounts;
 
 public sealed class FinancialAccountService(IFinancialJournal journal) : IFinancialAccountService
 {
+    public Task<FinancialTransferOutcome> RecordTransferAsync(FinancialOwner owner, FinancialTransferRequest request,
+        string idempotencyKey, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(request);
+        var errors = new Dictionary<string, string[]>();
+        ValidateKey(idempotencyKey, errors);
+        if (request.SourceAccountId == Guid.Empty) errors["sourceAccountId"] = ["A source account identifier is required."];
+        if (request.DestinationAccountId == Guid.Empty) errors["destinationAccountId"] = ["A destination account identifier is required."];
+        if (request.SourceAccountId == request.DestinationAccountId) errors["accounts"] = ["Transfer accounts must be distinct."];
+        var amount = ValidatePositiveAmount(request.Amount, request.Currency, errors);
+        string? reason = NormalizeOptionalReason(request.Reason, errors);
+        if (errors.Count != 0)
+            return Task.FromResult(new FinancialTransferOutcome(Failure: FinancialFailure.InvalidInput, Errors: errors));
+        return journal.RecordTransferAsync(owner, new(request.SourceAccountId, request.DestinationAccountId,
+            amount!.Value.Amount, amount.Value.Currency, reason, idempotencyKey), cancellationToken);
+    }
+
     public Task<FinancialEntryOutcome> RecordIncomeAsync(FinancialOwner owner, FinancialEntryRequest request,
         string idempotencyKey, CancellationToken cancellationToken = default) =>
         RecordEntryAsync(owner, request, idempotencyKey, true, cancellationToken);
@@ -61,13 +79,8 @@ public sealed class FinancialAccountService(IFinancialJournal journal) : IFinanc
         ArgumentNullException.ThrowIfNull(request);
         var errors = new Dictionary<string, string[]>();
         ValidateIdentityAndKey(request.AccountId, key, errors);
-        FinancialAmount? amount = null;
-        try { amount = new FinancialAmount(new Money(request.Amount, request.Currency!)); }
-        catch (DomainException exception) { errors["money"] = [exception.Message]; }
-
-        string? reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
-        if (reason?.Length > FinancialOperation.MaximumReasonLength)
-            errors["reason"] = ["A reason cannot exceed 200 characters."];
+        var amount = ValidatePositiveAmount(request.Amount, request.Currency, errors);
+        string? reason = NormalizeOptionalReason(request.Reason, errors);
         if (errors.Count != 0)
             return Task.FromResult(new FinancialEntryOutcome(Failure: FinancialFailure.InvalidInput, Errors: errors));
 
@@ -79,8 +92,27 @@ public sealed class FinancialAccountService(IFinancialJournal journal) : IFinanc
     private static void ValidateIdentityAndKey(Guid accountId, string key, Dictionary<string, string[]> errors)
     {
         if (accountId == Guid.Empty) { errors["accountId"] = ["An account identifier is required."]; }
+        ValidateKey(key, errors);
+    }
+
+    private static void ValidateKey(string key, Dictionary<string, string[]> errors)
+    {
         if (string.IsNullOrEmpty(key) || key.Length > 128 ||
             key.Any(character => !char.IsAsciiLetterOrDigit(character) && character is not ('-' or '_')))
             errors["idempotencyKey"] = ["Use 1-128 ASCII letters, digits, hyphens or underscores."];
+    }
+
+    private static FinancialAmount? ValidatePositiveAmount(decimal amount, string? currency, Dictionary<string, string[]> errors)
+    {
+        try { return new FinancialAmount(new Money(amount, currency!)); }
+        catch (DomainException exception) { errors["money"] = [exception.Message]; return null; }
+    }
+
+    private static string? NormalizeOptionalReason(string? value, Dictionary<string, string[]> errors)
+    {
+        string? reason = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        if (reason?.Length > FinancialOperation.MaximumReasonLength)
+            errors["reason"] = ["A reason cannot exceed 200 characters."];
+        return reason;
     }
 }

@@ -1,8 +1,8 @@
 # Financial Journal Persistence
 
-Status: journal storage implemented. The subsequent [opening](financial-opening-writer.md) and [Income/Expense](financial-income-expense.md) increments add controlled write/read cases; financial HTTP endpoints remain unimplemented.
+Status: journal storage implemented. The subsequent [opening](financial-opening-writer.md), [Income/Expense](financial-income-expense.md) and [Transfer](financial-transfers.md) increments add controlled write/read cases; financial HTTP endpoints remain unimplemented.
 
-The accepted policy is [ADR-002](decisions/ADR-002-financial-operation-journal.md). This increment implements relational storage for simulated financial history. The storage increment itself executes no financial commands. Subsequent increments implement controlled opening, Income/Expense and derived-balance reads, without Transfer/Reversal/correction commands or financial HTTP endpoints.
+The accepted policy is [ADR-002](decisions/ADR-002-financial-operation-journal.md). This increment implements relational storage for simulated financial history. The storage increment itself executes no financial commands. Subsequent increments implement controlled opening, Income/Expense/Transfer and derived-balance reads, without Reversal/correction commands or financial HTTP endpoints. FinancialTransferWriter adds only procedure/grant changes; table mappings and the effects view remain unchanged. All five migrations are validated only in the marked test database; development retains InitialPersistence.
 
 ## Review and mapping decision
 

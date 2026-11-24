@@ -1,8 +1,8 @@
 # Financial Engine Design
 
-Status: Accepted architecture; Domain, journal persistence, opening, Income/Expense and derived-balance reads implemented. Updated: 2026-11-24.
+Status: Accepted architecture; Domain, journal persistence, opening, Income/Expense/Transfer and derived-balance reads implemented. Updated: 2026-11-24.
 
-Vault Finance records simulated personal-finance assertions, not bank funds, custody, settlement, or credit. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the accepted architecture. The [journal persistence increment](financial-journal-persistence.md) adds storage/schema verified in a dedicated SQL database. The [initial opening writer and derived-balance read](financial-opening-writer.md) are now implemented and verified only in the dedicated SQL database. [Income and Expense](financial-income-expense.md) now extend the same controlled writer with exact funds/headroom checks and tested archive serialization. Transfer/Reversal, correction coordinators and financial HTTP endpoints remain unimplemented.
+Vault Finance records simulated personal-finance assertions, not bank funds, custody, settlement, or credit. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the accepted architecture. The [journal persistence increment](financial-journal-persistence.md) adds storage/schema verified in a dedicated SQL database. The [initial opening writer and derived-balance read](financial-opening-writer.md), [Income/Expense](financial-income-expense.md) and [internal Transfer](financial-transfers.md) execute through the same controlled SQL writer. Reversal, correction coordinators and financial HTTP endpoints remain unimplemented. Financial migrations remain unapplied to the development database.
 
 ## 1. Review and resolved contradictions
 
@@ -198,6 +198,8 @@ Receipts describe the original batch/operation IDs/revision, not a later-changin
 
 Account rows are common anchors. Use owner-scoped keyed UPDLOCK/HOLDLOCK reads inside the transaction, consistently ordered and sequential, before the separate fresh aggregate. AsNoTracking, Account rowversion and a transaction alone do not prevent journal-insert races.
 
+The implemented helper sorts only a private ID table in native SQL uniqueidentifier order, then completes a separate forced singleton Accounts PK seek per cursor iteration. Both transfer anchors are acquired before any fresh participant/balance validation; single-account commands/readers share the helper. ORDER BY over an Accounts result alone is not the locking guarantee. ROWLOCK does not exclude escalation; shared journal indexes can still serialize independent pairs. See financial-transfers.md for the exact protocol, observed contention and retry limits.
+
 Two expenses 80 against 100: first commits 20; second acquires the anchor afterward and rejects. Transfer locks both accounts and checks source funds/destination headroom. Opening corrections use the same anchor plus expected revision.
 
 Archive's existing UPDATE conflicts with the anchor. If archive wins, ordinary posting/positive replacement rejects; if posting wins, archive follows. Exact reversals use the controlled exception. History/balance remain visible and no Account property is reactivated.
@@ -231,7 +233,7 @@ Known limits remain no liabilities, FX, partial reversals, user backdating, gene
 
 Current domain tests cover bounded amounts, each kind, identifiers, ownership/currency/Active snapshots, immutable metadata, UTC/Santo Domingo boundaries, causal reversal references and forbidden mutable transitions. Prior tests are retained.
 
-Proved storage guarantees now include exact provider round trips, typed/scoped references, original-reversal uniqueness, owner/type/key uniqueness, append-only SQL behavior and migration/model alignment. Initial opening now proves zero/positive initialization, same-scope concurrent replay/conflict, complete opening-batch rollback, derived-balance guards, native account/key locks and restricted-role execution. Income/Expense now prove fresh locked funds/headroom checks, exact zero expenditure, concurrent overspending prevention, stable rejected results, and both archive/operation orders. Not yet proved: correction/current replacement revision, transfer atomicity, physical lost-commit response/native deadlock fault injection, or runtime production-principal deployment. Later writer tests require independent connections, actual commit boundaries and fault injection; sequential shared-transaction HTTP fixtures are insufficient.
+Proved storage guarantees include exact provider round trips, typed/scoped references, original-reversal uniqueness, owner/type/key uniqueness, append-only SQL behavior and migration/model alignment. Opening proves zero/positive initialization, concurrent replay/conflict, complete rollback, derived-balance guards and restricted-role execution. Income/Expense add fresh funds/headroom checks, overspending prevention and stable rejections. Transfer adds both-account locks, atomic one-operation/two-effect posting, conservation, rollback, opposite-direction/mixed-writer races and both archive orders with independent SQL sessions. Not yet proved: correction/current replacement revision, physical lost-commit response/native deadlock fault injection, or runtime production-principal deployment. Shared-transaction HTTP fixtures alone are insufficient evidence for these financial guarantees.
 
 | Increment | Exit evidence |
 | --- | --- |
@@ -240,13 +242,13 @@ Proved storage guarantees now include exact provider round trips, typed/scoped r
 | 3: additive schema/projection, implemented | Ownership keys, revision chains, positive amounts, one reversal and batch metadata; dedicated test database only |
 | 4: controlled writer, opening implemented | Atomic opening outcomes/audit, canonical replay, locks and no partial opening batches |
 | 5: opening implemented; correction deferred | Zero/positive initialization and derived balance verified; replacement/expected-revision correction remains future |
-| 6: Income/Expense implemented; Transfer/Reversal deferred | Overspending, exact funds/headroom, mixed serial outcomes and controlled archive ordering verified; transfer conservation/reversal workflows remain future |
+| 6: Income/Expense/Transfer implemented; Reversal deferred | Exact funds/headroom, atomic transfer conservation, opposite-direction/mixed serial outcomes, scoped replay and controlled archive ordering verified; reversal workflows remain future |
 | 7: HTTP/reconciliation | Cookie/CSRF/BOLA, consistent reads, diagnosis and fault injection |
 
 ADR acceptance closes architecture decisions, not unimplemented writer guarantees. The opening increment adds its Application cases and procedure/role migration, validated only in the marked existing test database. Development database application and financial HTTP endpoints remain excluded. /health remains independent of SQL.
 
 Current validation runs restore/build and the complete SQL-enabled suite against the separate marked database. No tests use the development database for destructive operations or cleanup.
 
-Historical increment-1 validation: 126 unit and 29 ordinary integration tests passed; 32 opt-in SQL methods were skipped. Historical persistence validation passed 302 cases. Historical opening validation passed 369 cases. Current Income/Expense validation passes 175 unit and 278 integration cases (453 total), with zero skips and zero build warnings/errors. See [Income/Expense evidence](financial-income-expense.md). The [opening contract](financial-opening-writer.md) documents the canonical encoding, lock duration, retry/commit ambiguity, role limits and fault evidence. The dedicated migration is applied; the development migration is not. See the persistence document for count expansion, initial failures and exact limits.
+Historical increment-1 validation: 126 unit and 29 ordinary integration tests passed; 32 opt-in SQL methods were skipped. Persistence passed 302 cases, opening passed 369 and Income/Expense passed 453. Current Transfer validation passes 196 unit and 332 integration cases (528 total), with zero skips and zero build warnings/errors, retaining all previous cases. See [transfer evidence](financial-transfers.md). The dedicated migration is applied; the development migration is not. See the persistence document for count expansion and test lifecycle limits.
 
 References: [SQL locks](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide?view=sql-server-ver15), [application locks](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sp-getapplock-transact-sql?view=sql-server-ver15), [EF transactions](https://learn.microsoft.com/en-us/ef/core/saving/transactions), [commit ambiguity](https://learn.microsoft.com/en-us/ef/core/miscellaneous/connection-resiliency).

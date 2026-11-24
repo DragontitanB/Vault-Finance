@@ -22,6 +22,12 @@ public sealed record FinancialEntryRequest(Guid AccountId, decimal Amount, strin
 
 public sealed record ValidatedFinancialEntry(Guid AccountId, decimal Amount, string Currency, string? Reason, string IdempotencyKey);
 
+public sealed record FinancialTransferRequest(Guid SourceAccountId, Guid DestinationAccountId,
+    decimal Amount, string? Currency, string? Reason = null);
+
+public sealed record ValidatedFinancialTransfer(Guid SourceAccountId, Guid DestinationAccountId,
+    decimal Amount, string Currency, string? Reason, string IdempotencyKey);
+
 public enum FinancialFailure
 {
     InvalidInput,
@@ -58,8 +64,18 @@ public sealed record FinancialEntryOutcome(
     FinancialEntryReceipt? Receipt = null, FinancialFailure? Failure = null,
     IReadOnlyDictionary<string, string[]>? Errors = null);
 
+public sealed record FinancialTransferReceipt(
+    int ReceiptVersion, Guid SourceAccountId, Guid DestinationAccountId, Guid BatchId, Guid OperationId,
+    FinancialOperationKind Kind, decimal Amount, string Currency, DateTimeOffset RecordedAtUtc, DateOnly EffectiveDate);
+
+public sealed record FinancialTransferOutcome(
+    FinancialTransferReceipt? Receipt = null, FinancialFailure? Failure = null,
+    IReadOnlyDictionary<string, string[]>? Errors = null);
+
 public interface IFinancialAccountService
 {
+    Task<FinancialTransferOutcome> RecordTransferAsync(FinancialOwner owner, FinancialTransferRequest request,
+        string idempotencyKey, CancellationToken cancellationToken = default);
     Task<FinancialEntryOutcome> RecordIncomeAsync(FinancialOwner owner, FinancialEntryRequest request,
         string idempotencyKey, CancellationToken cancellationToken = default);
     Task<FinancialEntryOutcome> RecordExpenseAsync(FinancialOwner owner, FinancialEntryRequest request,
@@ -72,6 +88,8 @@ public interface IFinancialAccountService
 /// <summary>The narrow SQL protocol boundary, not a repository or a set of independent inserts.</summary>
 public interface IFinancialJournal
 {
+    Task<FinancialTransferOutcome> RecordTransferAsync(FinancialOwner owner, ValidatedFinancialTransfer transfer,
+        CancellationToken cancellationToken);
     Task<FinancialEntryOutcome> RecordIncomeAsync(FinancialOwner owner, ValidatedFinancialEntry entry,
         CancellationToken cancellationToken);
     Task<FinancialEntryOutcome> RecordExpenseAsync(FinancialOwner owner, ValidatedFinancialEntry entry,

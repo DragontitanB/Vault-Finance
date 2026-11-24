@@ -113,6 +113,8 @@ public sealed class FinancialAccountServiceTests
 
     private sealed class CapturingJournal : IFinancialJournal
     {
+        public Task<FinancialTransferOutcome> RecordTransferAsync(FinancialOwner owner, ValidatedFinancialTransfer transfer, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
         public Task<FinancialEntryOutcome> RecordIncomeAsync(FinancialOwner owner, ValidatedFinancialEntry entry, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
         public Task<FinancialEntryOutcome> RecordExpenseAsync(FinancialOwner owner, ValidatedFinancialEntry entry, CancellationToken cancellationToken) =>

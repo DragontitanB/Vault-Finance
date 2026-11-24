@@ -2,6 +2,8 @@
 
 Status: implemented Application cases and controlled SQL writes; no financial HTTP endpoints.
 
+This document records the Income/Expense increment and its historical validation. The subsequent [Transfer increment](financial-transfers.md) extends the same SQL writer, strengthens the shared account helper with forced singleton PK seeks, and retains all entry hashes/receipts and tests. References below to future Transfer describe the scope of this earlier increment.
+
 This increment extends [ADR-002](decisions/ADR-002-financial-operation-journal.md), the [engine design](financial-engine-design.md), [journal schema](financial-journal-persistence.md) and [opening protocol](financial-opening-writer.md). Vault Finance records simulated personal finance, not bank funds or payments.
 
 ## Contracts and invariants

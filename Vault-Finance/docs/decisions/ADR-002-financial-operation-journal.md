@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-23
-- Scope: Accepted MVP architecture; Domain, journal storage and opening/Income/Expense writers implemented; Transfer/Reversal/correction deferred
+- Scope: Accepted MVP architecture; Domain, journal storage and opening/Income/Expense/Transfer writers implemented; Reversal/correction deferred
 - Contract: [Financial Engine Design](../financial-engine-design.md)
 
 ## Decision
@@ -45,7 +45,7 @@ Domain implements FinancialAmount, immutable FinancialPostingContext, kind/statu
 
 Validate positive/range/precision/currency, IDs, account snapshots, UTC/calendar metadata and local reversal causality. Creating a reversal never mutates its original or proves global uniqueness.
 
-Domain remains independent of data access and frameworks. Initial opening and a locked derived-balance read now execute through Application/Infrastructure without changing Domain. Correction/transfer coordinators and financial HTTP endpoints remain absent.
+Domain remains independent of data access and frameworks. Initial opening, Income, Expense, Transfer and locked derived-balance reads execute through Application/Infrastructure without changing Domain. Correction/reversal coordinators and financial HTTP endpoints remain absent.
 
 ## Persistence increment
 
@@ -57,7 +57,15 @@ The migration is validated only in the marked VaultFinanceJournalTests database.
 
 The [opening protocol](../financial-opening-writer.md) implements zero/positive initialization, owner-scoped derived reads, SQL-canonical SHA-256 fingerprints, scoped request locks, deterministic account locks and complete outcome/audit commit. Stable business rejections store only outcome/audit; pre-commit technical failures roll back all rows. Response loss after commit is resolved by the same key, with an explicit unknown outcome when bounded recovery cannot establish a result.
 
-InitialFinancialWriter adds four procedures and one restricted role, without changing tables or previously applied migrations. It is applied only to the existing marked test database. The runtime role is tested under a non-owner principal; development administrators retain privileges and are outside that guarantee. The [Income/Expense increment](../financial-income-expense.md) now reuses one internal SQL transaction owner for opening and entries, preserving opening v1 hashes/receipts. Two restricted public entry points select fixed Income/Expense commands. Locked exact funds/headroom validation and real archive serialization are verified. Transfer/Reversal and opening correction remain non-executable; no HTTP financial endpoint is enabled.
+InitialFinancialWriter adds four procedures and one restricted role, without changing tables or previously applied migrations. It is applied only to the existing marked test database. The runtime role is tested under a non-owner principal; development administrators retain privileges and are outside that guarantee. The [Income/Expense increment](../financial-income-expense.md) reuses one internal SQL transaction owner for opening and entries, preserving opening v1 hashes/receipts. Two restricted public entry points select fixed Income/Expense commands. Locked exact funds/headroom validation and real archive serialization are verified. Reversal and opening correction remain non-executable; no HTTP financial endpoint is enabled.
+
+## Internal-transfer writer increment
+
+The [transfer increment](../financial-transfers.md) extends that same SQL transaction owner with fixed command type Transfer. One canonical operation derives two opposite effects. Both owned Active/initialized same-currency accounts are locked before fresh validation. A private ID cursor enumerates native SQL Guid order; each account is acquired by a separate forced singleton PK seek, rather than assuming an Accounts ORDER BY controls lock acquisition. Single-account commands/readers use the same helper; archive retains its conflicting EF write lock.
+
+Exact source sufficiency, destination headroom and pair conservation are checked before insertion and again on the final complete batch. Batch, operation, persistent replay/rejection and audit commit together. Transfer v1 includes both semantic participant positions; historical Opening/Income/Expense hashes and receipts remain compatible. FinancialTransferWriter adds only procedure changes/grants on the marked test database. Development remains unmigrated.
+
+Independent-session tests verify opposite directions, overspending, mixed writers, both archive orders, identical retries, rollback and restricted execution. Journal-index contention can serialize independent pairs; no deadlock-free or independent-throughput claim is made. Physical lost-commit response and native deadlock fault injection remain unverified. ADR status remains Accepted; no domain or architecture change is required.
 
 ## Alternatives and consequences
 

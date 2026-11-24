@@ -6,7 +6,7 @@ This extends [ADR-002](decisions/ADR-002-financial-operation-journal.md), the [e
 
 ## Scope and resolved boundaries
 
-This document records the original opening increment. The subsequent [Income/Expense increment](financial-income-expense.md) extends the same protocol. Transfer, Reversal and opening correction still have no executable Application/SQL entry points. Money, Account and FinancialOperation are unchanged. No Balance column, pending operation, mutable original or generic repository is introduced.
+This document records the original opening increment and its historical validation. Subsequent [Income/Expense](financial-income-expense.md) and [Transfer](financial-transfers.md) increments extend the same protocol, including forced singleton account seeks for all commands. Reversal and opening correction still have no executable Application/SQL entry points. Money, Account and FinancialOperation are unchanged. No Balance column, pending operation, mutable original or generic repository is introduced.
 
 Business rejection is a final result, not a partially successful financial operation: it persists only a rejected outcome and its audit. Technical failure before commit rolls back the complete transaction. A response lost after commit cannot undo confirmed history; resolve it through the same idempotency scope, never by guessing rollback or changing the key.
 

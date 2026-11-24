@@ -10,6 +10,7 @@ using VaultFinance.Application.Authentication;
 using Microsoft.AspNetCore.DataProtection;
 using VaultFinance.Application.Accounts;
 using VaultFinance.Application.FinancialAccounts;
+using VaultFinance.Application.FinancialInspection;
 using VaultFinance.Infrastructure.Persistence.FinancialJournal;
 
 namespace VaultFinance.Infrastructure;
@@ -93,6 +94,8 @@ public static class DependencyInjection
         services.AddScoped<IAccountStore, EfAccountStore>();
         services.AddScoped<IFinancialJournal, SqlFinancialJournal>();
         services.AddScoped<IFinancialAccountService, FinancialAccountService>();
+        services.AddScoped<IJournalInspectionReader, SqlJournalInspectionReader>();
+        services.AddScoped<IFinancialInspectionService, FinancialInspectionService>();
 
         return services;
     }

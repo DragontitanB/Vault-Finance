@@ -1,0 +1,26 @@
+ Vault-Finance/README.md                            |   6 [32m+[m[31m-[m
+ .../scripts/sql/FinancialJournalInspection.sql     | 125 [32m++++[m
+ .../FinancialInspectionService.cs                  |  33 [32m+[m
+ .../FinancialInspection/InspectionContracts.cs     |  46 [32m++[m
+ .../JournalIntegrityEvaluator.Outcomes.cs          | 172 [32m+++++[m
+ .../JournalIntegrityEvaluator.Structure.cs         |  79 [32m+++[m
+ .../JournalIntegrityEvaluator.cs                   | 213 [32m++++++[m
+ .../DependencyInjection.cs                         |   3 [32m+[m
+ .../FinancialJournal/SqlJournalInspectionReader.cs |  72 [32m++[m
+ ...24181610_FinancialJournalInspection.Designer.cs | 759 [32m+++++++++++++++++++++[m
+ .../20261124181610_FinancialJournalInspection.cs   |  31 [32m+[m
+ .../Migrations/Sql/FinancialJournalInspection.sql  |  99 [32m+++[m
+ .../VaultFinance.Infrastructure.csproj             |   1 [32m+[m
+ ...inancialInspectionSqlServerTests.Concurrency.cs | 125 [32m++++[m
+ .../FinancialInspectionSqlServerTests.Security.cs  |  94 [32m+++[m
+ .../FinancialInspectionSqlServerTests.cs           | 202 [32m++++++[m
+ .../Persistence/FinancialJournalSqlServerTests.cs  |   2 [32m+[m[31m-[m
+ .../FinancialInspectionServiceTests.cs             |  58 [32m++[m
+ .../FinancialInspection/InspectionFixture.cs       | 118 [32m++++[m
+ .../JournalIntegrityEvaluatorTests.cs              | 166 [32m+++++[m
+ Vault-Finance/docs/architecture.md                 |   2 [32m+[m
+ Vault-Finance/docs/financial-engine-design.md      |   8 [32m+[m[31m-[m
+ .../docs/financial-journal-persistence.md          |   2 [32m+[m
+ Vault-Finance/docs/financial-reconciliation.md     | 148 [32m++++[m
+ Vault-Finance/docs/security.md                     |   6 [32m+[m
+ 25 files changed, 2563 insertions(+), 7 deletions(-)

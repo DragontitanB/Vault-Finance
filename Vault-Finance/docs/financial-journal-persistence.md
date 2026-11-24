@@ -1,5 +1,7 @@
 # Financial Journal Persistence
 
+The subsequent [read-only inspection increment](financial-reconciliation.md) adds migration 20261124181610_FinancialJournalInspection for one capture procedure and a separate diagnostic role/permissions only. No table, effects view, writer procedure, EF model or prior migration is changed. It is applied exclusively to the marked VaultFinanceJournalTests database. Development VaultFinanceDb still has InitialPersistence only. The current SQL-enabled suite retains the 696 earlier cases and passes 777 total; invalid new journal states exist only in pure inspection fixtures.
+
 Status: journal storage implemented. The subsequent [opening](financial-opening-writer.md), [Income/Expense](financial-income-expense.md), [Transfer](financial-transfers.md) and [Reversal](financial-reversals.md) increments add controlled write/read cases; financial HTTP endpoints remain unimplemented.
 
 The accepted policy is [ADR-002](decisions/ADR-002-financial-operation-journal.md). This increment implements relational storage for simulated financial history. The storage increment itself executes no financial commands. Subsequent increments implement controlled opening, Income/Expense/Transfer/Reversal and derived-balance reads, with atomic opening correction added subsequently and no financial HTTP endpoints. FinancialTransferWriter adds only procedure/grant changes; table mappings and the effects view remain unchanged. All seven migrations are validated only in the marked test database; development retains InitialPersistence.

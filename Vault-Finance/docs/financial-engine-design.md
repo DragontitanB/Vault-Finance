@@ -1,6 +1,6 @@
 # Financial Engine Design
 
-Status: Accepted architecture; Domain, journal persistence, opening/correction, Income/Expense/Transfer/Reversal and derived-balance reads implemented. Updated: 2026-11-24.
+Status: Accepted architecture; Domain, journal persistence, opening/correction, Income/Expense/Transfer/Reversal, derived-balance reads and read-only reconciliation implemented. Updated: 2026-11-24.
 
 Vault Finance records simulated personal-finance assertions, not bank funds, custody, settlement, or credit. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the accepted architecture. The [journal persistence increment](financial-journal-persistence.md) adds storage/schema verified in a dedicated SQL database. The [initial opening writer and derived-balance read](financial-opening-writer.md), [Income/Expense](financial-income-expense.md) and [internal Transfer](financial-transfers.md) execute through the same controlled SQL writer. [Complete reversals](financial-reversals.md) now compensate Income/Expense/Transfer through the same writer, preserving originals and allowing bounded archived-account compensation. [Atomic opening correction](financial-opening-corrections.md) now implements immutable successor revisions, exact compensation/replacement and final-only balance validation. Financial HTTP endpoints remain unimplemented. Financial migrations remain unapplied to the development database.
 
@@ -123,7 +123,7 @@ A standalone reversal of the current opening must append the next zero revision 
 
 Archived accounts allow qualifying exact cancellation/reversal if the final balance stays nonnegative. A positive opening replacement requires Active status. No account reactivation is introduced.
 
-Domain contains positive Opening/Reversal descriptors. Infrastructure now stores opening-version metadata, including explicit zero revisions. InitializeOpening now implements zero initialization and positive initialization through the controlled SQL protocol. Atomic correction is now implemented through the same writer. No general batch coordinator or reconciliation service is introduced.
+Domain contains positive Opening/Reversal descriptors. Infrastructure now stores opening-version metadata, including explicit zero revisions. InitializeOpening now implements zero initialization and positive initialization through the controlled SQL protocol. Atomic correction is now implemented through the same writer. No general batch coordinator is introduced. The subsequent [read-only reconciliation service](financial-reconciliation.md) independently evaluates retained canonical rows without adding a financial write path.
 
 ## 8. Precision and mapping obligations
 
@@ -223,7 +223,7 @@ Deadlocks/escalation remain possible. Bound waits and retry the whole idempotent
 | Existing aggregate/invariant corruption | Roll back and investigate; never round into success |
 | Valid Income/Expense would exceed funds or balance limit | Persist a rejected outcome/audit only; no financial batch/effect |
 
-Use complete committed batches for reads. RCSI gives statement consistency; consistent multi-query reconciliation needs explicitly enabled snapshot isolation or another reviewed protocol. No NOLOCK. A batch identity high-water mark is not a global commit watermark.
+Use complete committed batches for reads. RCSI gives statement consistency; consistent multi-query reconciliation needs explicitly enabled snapshot isolation or another reviewed protocol. The implemented [inspection protocol](financial-reconciliation.md) acquires all six retained shared table locks before exporting any data, and compares independent reconstruction, view and usual-reader results within that same freeze. It changes no database isolation option and can temporarily block writers of all owners. No NOLOCK. A batch identity high-water mark is not a global commit watermark.
 
 Independently recalculate canonical effects/reversal references/revision chains and compare with the read projection: ownership/currency, exact inverse/uniqueness, complete result/audit membership, final batch bounds, transfer conservation and net openings + net income - net expense. Include original/reversal dates individually; do not erase original history or auto-invent adjustments to hide mismatches.
 
@@ -251,6 +251,6 @@ ADR acceptance closes architecture decisions, not unimplemented writer guarantee
 
 Current validation runs restore/build and the complete SQL-enabled suite against the separate marked database. No tests use the development database for destructive operations or cleanup.
 
-Historical increment-1 validation: 126 unit and 29 ordinary integration tests passed; 32 opt-in SQL methods were skipped. Persistence passed 302 cases, opening passed 369 and Income/Expense passed 453. Transfer validation passed 528. Reversal validation passed 605. Current opening-correction validation passes 228 unit and 468 integration cases (696 total), with zero skips and zero build warnings/errors, retaining all previous cases. See [correction evidence](financial-opening-corrections.md). The dedicated migration is applied; the development migration is not. See the persistence document for count expansion and test lifecycle limits.
+Historical increment-1 validation: 126 unit and 29 ordinary integration tests passed; 32 opt-in SQL methods were skipped. Persistence passed 302 cases, opening passed 369 and Income/Expense passed 453. Transfer validation passed 528. Reversal validation passed 605. Opening correction passed 696. Current reconciliation validation passes 286 unit and 491 integration cases (777 total), with zero skips and zero build warnings/errors, retaining all previous cases. See [inspection evidence and limits](financial-reconciliation.md). The dedicated migration is applied; development still has InitialPersistence only. See the persistence document for count expansion and test lifecycle limits.
 
 References: [SQL locks](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide?view=sql-server-ver15), [application locks](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sp-getapplock-transact-sql?view=sql-server-ver15), [EF transactions](https://learn.microsoft.com/en-us/ef/core/saving/transactions), [commit ambiguity](https://learn.microsoft.com/en-us/ef/core/miscellaneous/connection-resiliency).

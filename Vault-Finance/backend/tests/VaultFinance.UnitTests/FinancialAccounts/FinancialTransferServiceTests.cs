@@ -90,6 +90,8 @@ public sealed class FinancialTransferServiceTests
 
     private sealed class CapturingJournal : IFinancialJournal
     {
+        public Task<OpeningCorrectionOutcome> CorrectOpeningAsync(FinancialOwner owner, ValidatedOpeningCorrection correction, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
         public Task<FinancialReversalOutcome> RecordReversalAsync(FinancialOwner owner, ValidatedFinancialReversal reversal, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
         public int Calls { get; private set; }

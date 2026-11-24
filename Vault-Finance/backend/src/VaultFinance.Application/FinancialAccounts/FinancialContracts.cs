@@ -18,6 +18,19 @@ public sealed record InitializeOpeningRequest(Guid AccountId, decimal Amount, st
 
 public sealed record ValidatedOpening(Guid AccountId, decimal Amount, string Currency, string Reason, string IdempotencyKey);
 
+public sealed record CorrectOpeningRequest(Guid AccountId, decimal Amount, string? Currency, int ExpectedRevision, string? Reason);
+
+public sealed record ValidatedOpeningCorrection(Guid AccountId, decimal Amount, string Currency, int ExpectedRevision, string Reason, string IdempotencyKey);
+
+public sealed record OpeningCorrectionReceipt(
+    int ReceiptVersion, Guid AccountId, Guid BatchId, int PreviousRevision, int Revision,
+    Guid? PreviousOpeningOperationId, Guid? CompensationOperationId, Guid? OpeningOperationId,
+    decimal PreviousOpeningAmount, decimal OpeningAmount, string Currency, DateTimeOffset RecordedAtUtc, DateOnly EffectiveDate);
+
+public sealed record OpeningCorrectionOutcome(
+    OpeningCorrectionReceipt? Receipt = null, FinancialFailure? Failure = null,
+    IReadOnlyDictionary<string, string[]>? Errors = null);
+
 public sealed record FinancialEntryRequest(Guid AccountId, decimal Amount, string? Currency, string? Reason = null);
 
 public sealed record ValidatedFinancialEntry(Guid AccountId, decimal Amount, string Currency, string? Reason, string IdempotencyKey);
@@ -47,7 +60,10 @@ public enum FinancialFailure
     InsufficientFunds,
     BalanceLimitExceeded,
     OperationNotReversible,
-    AlreadyReversed
+    AlreadyReversed,
+    OpeningVersionConflict,
+    OpeningUnchanged,
+    OpeningRevisionLimitExceeded
 }
 
 public sealed record OpeningReceipt(
@@ -80,6 +96,8 @@ public sealed record FinancialTransferOutcome(
 
 public interface IFinancialAccountService
 {
+    Task<OpeningCorrectionOutcome> CorrectOpeningAsync(FinancialOwner owner, CorrectOpeningRequest request,
+        string idempotencyKey, CancellationToken cancellationToken = default);
     Task<FinancialReversalOutcome> RecordReversalAsync(FinancialOwner owner, FinancialReversalRequest request,
         string idempotencyKey, CancellationToken cancellationToken = default);
     Task<FinancialTransferOutcome> RecordTransferAsync(FinancialOwner owner, FinancialTransferRequest request,
@@ -96,6 +114,8 @@ public interface IFinancialAccountService
 /// <summary>The narrow SQL protocol boundary, not a repository or a set of independent inserts.</summary>
 public interface IFinancialJournal
 {
+    Task<OpeningCorrectionOutcome> CorrectOpeningAsync(FinancialOwner owner, ValidatedOpeningCorrection correction,
+        CancellationToken cancellationToken);
     Task<FinancialReversalOutcome> RecordReversalAsync(FinancialOwner owner, ValidatedFinancialReversal reversal,
         CancellationToken cancellationToken);
     Task<FinancialTransferOutcome> RecordTransferAsync(FinancialOwner owner, ValidatedFinancialTransfer transfer,

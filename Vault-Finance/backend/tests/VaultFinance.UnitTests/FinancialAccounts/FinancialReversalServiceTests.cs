@@ -63,6 +63,8 @@ public sealed class FinancialReversalServiceTests
 
     private sealed class CapturingJournal : IFinancialJournal
     {
+        public Task<OpeningCorrectionOutcome> CorrectOpeningAsync(FinancialOwner owner, ValidatedOpeningCorrection correction, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
         public FinancialOwner? Owner { get; private set; }
         public ValidatedFinancialReversal? Reversal { get; private set; }
         public CancellationToken Token { get; private set; }

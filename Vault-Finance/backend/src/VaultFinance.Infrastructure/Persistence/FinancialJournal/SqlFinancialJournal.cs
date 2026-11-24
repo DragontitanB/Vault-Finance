@@ -16,6 +16,31 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
         ?? throw new InvalidOperationException("Financial persistence requires a configured connection.");
     private const int MaximumAttempts = 3;
 
+    public Task<OpeningCorrectionOutcome> CorrectOpeningAsync(FinancialOwner owner,
+        ValidatedOpeningCorrection correction, CancellationToken cancellationToken) =>
+        ExecuteWriteAsync("dbo.CorrectFinancialOpening", owner, correction.AccountId, correction.Amount,
+            correction.Currency, correction.Reason, correction.IdempotencyKey, (code, json) =>
+            {
+                if (code != "opening.corrected") return new OpeningCorrectionOutcome(Failure: Failure(code));
+                var receipt = JsonSerializer.Deserialize<OpeningCorrectionReceipt>(json, ReceiptOptions);
+                if (receipt is null || receipt.ReceiptVersion != 1 || receipt.AccountId != correction.AccountId ||
+                    receipt.BatchId == Guid.Empty || receipt.PreviousRevision != correction.ExpectedRevision ||
+                    receipt.Revision != (long)correction.ExpectedRevision + 1 || receipt.OpeningAmount != correction.Amount ||
+                    receipt.Currency != correction.Currency || receipt.RecordedAtUtc.Offset != TimeSpan.Zero ||
+                    receipt.PreviousOpeningAmount < 0m || receipt.PreviousOpeningAmount > FinancialAmount.MaximumValue ||
+                    (receipt.PreviousOpeningOperationId is null) != (receipt.PreviousOpeningAmount == 0m) ||
+                    (receipt.CompensationOperationId is null) != (receipt.PreviousOpeningAmount == 0m) ||
+                    (receipt.OpeningOperationId is null) != (correction.Amount == 0m) ||
+                    receipt.PreviousOpeningOperationId == Guid.Empty || receipt.CompensationOperationId == Guid.Empty ||
+                    receipt.OpeningOperationId == Guid.Empty || receipt.PreviousOpeningAmount == receipt.OpeningAmount ||
+                    (receipt.CompensationOperationId.HasValue && (receipt.CompensationOperationId == receipt.PreviousOpeningOperationId ||
+                        receipt.CompensationOperationId == receipt.OpeningOperationId)) ||
+                    (receipt.OpeningOperationId.HasValue && receipt.OpeningOperationId == receipt.PreviousOpeningOperationId))
+                    return new OpeningCorrectionOutcome(Failure: FinancialFailure.JournalInconsistent);
+                return new OpeningCorrectionOutcome(receipt);
+            }, failure => new OpeningCorrectionOutcome(Failure: failure), cancellationToken,
+            expectedRevision: correction.ExpectedRevision);
+
     public Task<FinancialReversalOutcome> RecordReversalAsync(FinancialOwner owner,
         ValidatedFinancialReversal reversal, CancellationToken cancellationToken) =>
         ExecuteProtocolAsync(connection =>
@@ -104,7 +129,7 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
     private Task<TResult> ExecuteWriteAsync<TResult>(string procedure, FinancialOwner owner,
         Guid accountId, decimal amount, string currency, string? reason, string key,
         Func<string, string, TResult> decode, Func<FinancialFailure, TResult> failed, CancellationToken cancellationToken,
-        Guid? destinationAccountId = null) =>
+        Guid? destinationAccountId = null, int? expectedRevision = null) =>
         ExecuteProtocolAsync(connection =>
         {
             var command = Procedure(connection, procedure, owner, accountId,
@@ -117,6 +142,8 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
             command.Parameters.Add("@Currency", SqlDbType.NVarChar, -1).Value = currency;
             command.Parameters.Add("@Reason", SqlDbType.NVarChar, -1).Value = (object?)reason ?? DBNull.Value;
             command.Parameters.Add("@IdempotencyKey", SqlDbType.NVarChar, -1).Value = key;
+            if (expectedRevision.HasValue)
+                command.Parameters.Add("@ExpectedRevision", SqlDbType.Int).Value = expectedRevision.Value;
             return command;
         }, decode, failed, cancellationToken);
 
@@ -204,6 +231,9 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
         "account.archived" => FinancialFailure.Archived,
         "account.currency_mismatch" => FinancialFailure.CurrencyMismatch,
         "opening.already_initialized" => FinancialFailure.AlreadyInitialized,
+        "opening.version_conflict" => FinancialFailure.OpeningVersionConflict,
+        "opening.unchanged" => FinancialFailure.OpeningUnchanged,
+        "opening.revision_limit_exceeded" => FinancialFailure.OpeningRevisionLimitExceeded,
         "account.uninitialized" => FinancialFailure.Uninitialized,
         "funds.insufficient" => FinancialFailure.InsufficientFunds,
         "balance.limit_exceeded" => FinancialFailure.BalanceLimitExceeded,

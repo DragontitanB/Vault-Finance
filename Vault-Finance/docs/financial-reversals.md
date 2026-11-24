@@ -2,6 +2,8 @@
 
 Status: implemented and verified in the existing marked VaultFinanceJournalTests database on SQL Server 2019 Express. Updated: 2026-11-24.
 
+This document records the Reversal increment and its historical results. The subsequent [atomic opening-correction increment](financial-opening-corrections.md) adds a separate fixed command for current-opening compensation/replacement. Ordinary Reversal still rejects Opening and Reversal targets. References below to future correction describe this earlier increment's scope.
+
 This increment implements the existing policy in [ADR-002](decisions/ADR-002-financial-operation-journal.md) and the [engine design](financial-engine-design.md), extending the shared [opening](financial-opening-writer.md), [Income/Expense](financial-income-expense.md) and [Transfer](financial-transfers.md) protocol. It records simulated personal finances, not bank funds. No new architecture decision is required; ADR-002 remains Accepted and unchanged. Opening correction and financial HTTP endpoints remain unimplemented.
 
 ## Review and scope

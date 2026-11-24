@@ -1,8 +1,8 @@
 # Financial Engine Design
 
-Status: Accepted architecture; Domain, journal persistence, opening, Income/Expense/Transfer/Reversal and derived-balance reads implemented. Updated: 2026-11-24.
+Status: Accepted architecture; Domain, journal persistence, opening/correction, Income/Expense/Transfer/Reversal and derived-balance reads implemented. Updated: 2026-11-24.
 
-Vault Finance records simulated personal-finance assertions, not bank funds, custody, settlement, or credit. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the accepted architecture. The [journal persistence increment](financial-journal-persistence.md) adds storage/schema verified in a dedicated SQL database. The [initial opening writer and derived-balance read](financial-opening-writer.md), [Income/Expense](financial-income-expense.md) and [internal Transfer](financial-transfers.md) execute through the same controlled SQL writer. [Complete reversals](financial-reversals.md) now compensate Income/Expense/Transfer through the same writer, preserving originals and allowing bounded archived-account compensation. Opening-correction coordinators and financial HTTP endpoints remain unimplemented. Financial migrations remain unapplied to the development database.
+Vault Finance records simulated personal-finance assertions, not bank funds, custody, settlement, or credit. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the accepted architecture. The [journal persistence increment](financial-journal-persistence.md) adds storage/schema verified in a dedicated SQL database. The [initial opening writer and derived-balance read](financial-opening-writer.md), [Income/Expense](financial-income-expense.md) and [internal Transfer](financial-transfers.md) execute through the same controlled SQL writer. [Complete reversals](financial-reversals.md) now compensate Income/Expense/Transfer through the same writer, preserving originals and allowing bounded archived-account compensation. [Atomic opening correction](financial-opening-corrections.md) now implements immutable successor revisions, exact compensation/replacement and final-only balance validation. Financial HTTP endpoints remain unimplemented. Financial migrations remain unapplied to the development database.
 
 ## 1. Review and resolved contradictions
 
@@ -99,7 +99,7 @@ Reversals take the current effective date; do not hide originals globally or rew
 
 Do not implement the old unique index that permits only one monetary Opening forever.
 
-Future FinancialOpeningVersions provides one immutable revision chain per owner/account/currency:
+FinancialOpeningVersions provides one immutable revision chain per owner/account/currency:
 
 - Revision 1 initializes exactly once.
 - Later revisions reference the immediately preceding revision.
@@ -107,7 +107,7 @@ Future FinancialOpeningVersions provides one immutable revision chain per owner/
 - A zero revision explicitly has no Opening operation.
 - Old versions and operations never change.
 
-The future CorrectOpening command carries the expected current revision, desired nonnegative bounded opening amount, reason, and idempotency key. Under the account lock it validates that revision and constructs:
+The implemented CorrectOpening command carries the expected current revision, desired nonnegative bounded opening amount, reason, and idempotency key. Under the account lock it validates that revision and constructs:
 
 | Previous | Target | Atomic contents |
 | --- | --- | --- |
@@ -123,7 +123,7 @@ A standalone reversal of the current opening must append the next zero revision 
 
 Archived accounts allow qualifying exact cancellation/reversal if the final balance stays nonnegative. A positive opening replacement requires Active status. No account reactivation is introduced.
 
-Domain contains positive Opening/Reversal descriptors. Infrastructure now stores opening-version metadata, including explicit zero revisions. InitializeOpening now implements zero initialization and positive initialization through the controlled SQL protocol. Correction and general batch coordination remain future work.
+Domain contains positive Opening/Reversal descriptors. Infrastructure now stores opening-version metadata, including explicit zero revisions. InitializeOpening now implements zero initialization and positive initialization through the controlled SQL protocol. Atomic correction is now implemented through the same writer. No general batch coordinator or reconciliation service is introduced.
 
 ## 8. Precision and mapping obligations
 
@@ -233,9 +233,9 @@ Known limits remain no liabilities, FX, partial reversals, user backdating, gene
 
 Current domain tests cover bounded amounts, each kind, identifiers, ownership/currency/Active snapshots, immutable metadata, UTC/Santo Domingo boundaries, causal reversal references and forbidden mutable transitions. Prior tests are retained.
 
-Proved storage guarantees include exact provider round trips, typed/scoped references, original-reversal uniqueness, owner/type/key uniqueness, append-only SQL behavior and migration/model alignment. Opening proves zero/positive initialization, concurrent replay/conflict, complete rollback, derived-balance guards and restricted-role execution. Income/Expense add fresh funds/headroom checks, overspending prevention and stable rejections. Transfer adds both-account locks, atomic one-operation/two-effect posting, conservation, rollback, opposite-direction/mixed-writer races and both archive orders with independent SQL sessions. Not yet proved: correction/current replacement revision, physical lost-commit response/native deadlock fault injection, or runtime production-principal deployment. Shared-transaction HTTP fixtures alone are insufficient evidence for these financial guarantees.
+Proved storage guarantees include exact provider round trips, typed/scoped references, original-reversal uniqueness, owner/type/key uniqueness, append-only SQL behavior and migration/model alignment. Opening proves zero/positive initialization, concurrent replay/conflict, complete rollback, derived-balance guards and restricted-role execution. Income/Expense add fresh funds/headroom checks, overspending prevention and stable rejections. Transfer adds both-account locks, atomic one-operation/two-effect posting, conservation, rollback, opposite-direction/mixed-writer races and both archive orders with independent SQL sessions. Not yet proved: physical lost-commit response/native deadlock fault injection or runtime production-principal deployment. Shared-transaction HTTP fixtures alone are insufficient evidence for these financial guarantees.
 
-The subsequent Reversal increment verifies exact reference-derived inverse effects for Income/Expense/Transfer, immutable original history, at-most-one compensation under account locks and the existing unique index, persistent second-reversal rejection, archived-account exception, mixed-writer races and audit-fault rollback. Ordinary Opening and Reversal targets are rejected; opening correction remains a separate future batch workflow. ADR-002's accepted policies are unchanged.
+The subsequent Reversal increment verifies exact reference-derived inverse effects for Income/Expense/Transfer, immutable original history, at-most-one compensation under account locks and the existing unique index, persistent second-reversal rejection, archived-account exception, mixed-writer races and audit-fault rollback. Ordinary Opening and Reversal targets remain rejected. The subsequent opening-correction writer alone may compensate the current Opening and advance its revision atomically, with same-amount rejection and the approved archived cancellation-to-zero exception. ADR-002's accepted policies are unchanged.
 
 | Increment | Exit evidence |
 | --- | --- |
@@ -243,7 +243,7 @@ The subsequent Reversal increment verifies exact reference-derived inverse effec
 | 2: isolated SQL feasibility, verified | Exact decimal/date materialization, independent connections and opening-role execution; production principal deployment still deferred |
 | 3: additive schema/projection, implemented | Ownership keys, revision chains, positive amounts, one reversal and batch metadata; dedicated test database only |
 | 4: controlled writer, opening implemented | Atomic opening outcomes/audit, canonical replay, locks and no partial opening batches |
-| 5: opening implemented; correction deferred | Zero/positive initialization and derived balance verified; replacement/expected-revision correction remains future |
+| 5: opening and atomic correction implemented | Zero/positive initialization, exact replacement/compensation, expected revision, final-only balance bounds and derived reads verified |
 | 6: Income/Expense/Transfer/Reversal implemented | Exact funds/headroom, transfer conservation, unique complete reversal, mixed serial outcomes, replay and controlled archive ordering verified |
 | 7: HTTP/reconciliation | Cookie/CSRF/BOLA, consistent reads, diagnosis and fault injection |
 
@@ -251,6 +251,6 @@ ADR acceptance closes architecture decisions, not unimplemented writer guarantee
 
 Current validation runs restore/build and the complete SQL-enabled suite against the separate marked database. No tests use the development database for destructive operations or cleanup.
 
-Historical increment-1 validation: 126 unit and 29 ordinary integration tests passed; 32 opt-in SQL methods were skipped. Persistence passed 302 cases, opening passed 369 and Income/Expense passed 453. Transfer validation passed 528. Current Reversal validation passes 207 unit and 398 integration cases (605 total), with zero skips and zero build warnings/errors, retaining all previous cases. See [reversal evidence](financial-reversals.md). The dedicated migration is applied; the development migration is not. See the persistence document for count expansion and test lifecycle limits.
+Historical increment-1 validation: 126 unit and 29 ordinary integration tests passed; 32 opt-in SQL methods were skipped. Persistence passed 302 cases, opening passed 369 and Income/Expense passed 453. Transfer validation passed 528. Reversal validation passed 605. Current opening-correction validation passes 228 unit and 468 integration cases (696 total), with zero skips and zero build warnings/errors, retaining all previous cases. See [correction evidence](financial-opening-corrections.md). The dedicated migration is applied; the development migration is not. See the persistence document for count expansion and test lifecycle limits.
 
 References: [SQL locks](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide?view=sql-server-ver15), [application locks](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sp-getapplock-transact-sql?view=sql-server-ver15), [EF transactions](https://learn.microsoft.com/en-us/ef/core/saving/transactions), [commit ambiguity](https://learn.microsoft.com/en-us/ef/core/miscellaneous/connection-resiliency).

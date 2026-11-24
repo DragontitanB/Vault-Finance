@@ -6,6 +6,31 @@ namespace VaultFinance.Application.FinancialAccounts;
 
 public sealed class FinancialAccountService(IFinancialJournal journal) : IFinancialAccountService
 {
+    public Task<OpeningCorrectionOutcome> CorrectOpeningAsync(FinancialOwner owner, CorrectOpeningRequest request,
+        string idempotencyKey, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(request);
+        var errors = new Dictionary<string, string[]>();
+        ValidateIdentityAndKey(request.AccountId, idempotencyKey, errors);
+        if (request.ExpectedRevision < 1) errors["expectedRevision"] = ["A positive expected opening revision is required."];
+        Money? money = null;
+        try
+        {
+            money = new Money(request.Amount, request.Currency!);
+            if (money.Amount < 0m || money.Amount > FinancialAmount.MaximumValue)
+                errors["amount"] = ["Opening amounts must be nonnegative and within the financial limit."];
+        }
+        catch (DomainException exception) { errors["money"] = [exception.Message]; }
+        string? reason = request.Reason?.Trim();
+        if (string.IsNullOrEmpty(reason) || reason.Length > FinancialOperation.MaximumReasonLength)
+            errors["reason"] = ["A reason of 1-200 characters is required."];
+        return errors.Count != 0
+            ? Task.FromResult(new OpeningCorrectionOutcome(Failure: FinancialFailure.InvalidInput, Errors: errors))
+            : journal.CorrectOpeningAsync(owner, new(request.AccountId, money!.Amount, money.Currency,
+                request.ExpectedRevision, reason!, idempotencyKey), cancellationToken);
+    }
+
     public Task<FinancialReversalOutcome> RecordReversalAsync(FinancialOwner owner, FinancialReversalRequest request,
         string idempotencyKey, CancellationToken cancellationToken = default)
     {

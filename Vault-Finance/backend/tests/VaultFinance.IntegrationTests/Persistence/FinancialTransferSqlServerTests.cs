@@ -11,6 +11,7 @@ using VaultFinance.Infrastructure.Persistence.FinancialJournal;
 
 namespace VaultFinance.IntegrationTests.Persistence;
 
+[Collection(FinancialSqlProtocolCollection.Name)]
 public sealed partial class FinancialTransferSqlServerTests(SqlServerFixture fixture)
     : IClassFixture<SqlServerFixture>, IAsyncLifetime
 {

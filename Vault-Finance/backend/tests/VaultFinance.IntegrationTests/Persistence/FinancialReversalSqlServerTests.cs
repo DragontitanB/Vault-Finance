@@ -11,6 +11,7 @@ using VaultFinance.Infrastructure.Persistence.FinancialJournal;
 
 namespace VaultFinance.IntegrationTests.Persistence;
 
+[Collection(FinancialSqlProtocolCollection.Name)]
 public sealed partial class FinancialReversalSqlServerTests(SqlServerFixture fixture) : IClassFixture<SqlServerFixture>, IAsyncLifetime
 {
     private readonly Guid ownerId = Guid.NewGuid();

@@ -4,15 +4,15 @@ Vault Finance is a personal finance portfolio project focused on .NET backend ar
 
 ## Current status
 
-The project provides a .NET 10 solution, Clean Architecture, immutable financial domain types, EF Core 10 SQL Server account/journal storage, and ASP.NET Core Identity stores with Guid keys. The API exposes process liveness and development-only OpenAPI. Application now supports initial financial opening and owner-scoped derived-balance reads, without financial HTTP endpoints.
+The project provides a .NET 10 solution, Clean Architecture, immutable financial domain types, EF Core 10 SQL Server account/journal storage, and ASP.NET Core Identity stores with Guid keys. The API exposes process liveness and development-only OpenAPI. Application now supports initial opening, Income, Expense and owner-scoped derived-balance reads, without financial HTTP endpoints.
 
-The API implements registration, cookie login/logout, current-user lookup, CSRF bootstrap, and owner-scoped account creation/listing/detail/rename/archive. Identity owns password validation/hashing, normalization, and temporary lockout. Journal storage has an additive migration validated only in a dedicated test database. Initial opening now uses an atomic SQL writer with canonical idempotency, audit and owner-scoped derived-balance reads. There are no executable Income/Expense/Transfer/Reversal use cases, financial HTTP endpoints, budgets, dashboard or frontend. Domain and the initial migration remain unchanged.
+The API implements registration, cookie login/logout, current-user lookup, CSRF bootstrap, and owner-scoped account creation/listing/detail/rename/archive. Identity owns password validation/hashing, normalization, and temporary lockout. Journal storage has an additive migration validated only in a dedicated test database. Initial opening now uses an atomic SQL writer with canonical idempotency, audit and owner-scoped derived-balance reads. Income and Expense extend the same transactional writer with initialized-account checks, exact funds/headroom validation and canonical replay. Transfer/Reversal/corrections, financial HTTP endpoints, budgets, dashboard and frontend remain unimplemented. Domain and the initial migration remain unchanged.
 
 ADR-002 is Accepted. Financial amounts are positive and bounded by decimal(28,2), using DOP/USD. Confirmed descriptors have no mutation/confirmation-again API; reversal references the original without editing it. UTC recording metadata derives an America/Santo_Domingo effective date. Creating a descriptor does not prove funds, global reversal uniqueness or SQL commit. See the [financial engine contract](docs/financial-engine-design.md) and [domain usage examples](docs/domain-model.md).
 
-Current validation: restore succeeded; build had zero warnings/errors; all 150 unit and 219 integration cases passed, with zero skips (369 total). The 302 prior cases are retained, with 24 new Application unit and 43 new real SQL cases. InitialFinancialWriter was applied only to the marked VaultFinanceJournalTests database; VaultFinanceDb still has InitialPersistence only. See [schema, constraints, SQL test safety and controlled migration commands](docs/financial-journal-persistence.md).
+Current validation: restore succeeded; build had zero warnings/errors; all 175 unit and 278 integration cases passed, with zero skips (453 total). All 369 prior cases are retained, with 25 new Application unit and 59 new real SQL cases. FinancialIncomeExpenseWriter was applied only to the marked VaultFinanceJournalTests database; VaultFinanceDb still has InitialPersistence only. See [schema, constraints, SQL test safety and controlled migration commands](docs/financial-journal-persistence.md).
 
-See the [opening protocol, concurrency evidence, exact limits and commands](docs/financial-opening-writer.md).
+See the [Income/Expense contracts, funds/archiving concurrency evidence and commands](docs/financial-income-expense.md), plus the retained [opening contract](docs/financial-opening-writer.md).
 
 ## Prerequisites
 
@@ -111,7 +111,7 @@ Authentication HTTP tests use WebApplicationFactory with the real SQL provider a
 
 The account suite uses two independent authenticated cookie jars per test against real SQL Server, with the same rollback isolation. It covers foreign-ID reads/writes, owner-only lists, strict DTOs, domain validation, archive idempotence, CSRF, paging, sorting, and a stale-snapshot rename after archive. The previous ownership/currency persistence assertion now includes the earlier EF alternate-key rejection.
 
-Historical account-management validation was 72 unit + 109 integration = 181 passes. Journal persistence subsequently passed 302 cases. Current validation passes 369, including independent-session concurrent replay/conflict/duplicate prevention, least-privilege execution, lock-timeout retry and full rollback after a forced audit failure. Physical network-loss/native-deadlock fault injection and other financial writers remain outside this increment.
+Historical account-management validation was 72 unit + 109 integration = 181 passes. Journal persistence subsequently passed 302 cases. Opening validation passed 369. Current validation passes 453, adding independent-session overspending/sufficient-funds/mixed-entry races, controlled archive ordering, entry permissions and audit-failure rollback. Physical network-loss/native-deadlock fault injection, Transfer/Reversal and opening correction remain outside this increment.
 
 ## Authentication and CSRF
 
@@ -252,6 +252,7 @@ docs/
   financial-engine-design.md
   financial-journal-persistence.md
   financial-opening-writer.md
+  financial-income-expense.md
   decisions/ADR-001-modular-monolith.md
   decisions/ADR-002-financial-operation-journal.md
 ```
@@ -259,8 +260,8 @@ docs/
 | Project | Responsibility | Direct project references |
 | --- | --- | --- |
 | Domain | Money, Account, immutable financial descriptors and local invariants | None |
-| Application | Authentication/account contracts, initial-opening and derived-balance use cases | Domain |
-| Infrastructure | SQL Server storage, transactional opening protocol and Identity | Application, Domain |
+| Application | Authentication/account contracts, opening, Income/Expense and derived-balance use cases | Domain |
+| Infrastructure | SQL Server storage, shared transactional financial protocol and Identity | Application, Domain |
 | Api | HTTP endpoints and composition root | Application, Infrastructure |
 | UnitTests | Domain invariants and isolated opening Application behavior | Domain, Application |
 | IntegrationTests | HTTP/configuration checks and opt-in real SQL tests | Api, Infrastructure |
@@ -287,6 +288,7 @@ Data Protection uses application name VaultFinance and the Windows profile's nor
 - [Accepted financial engine contracts and implementation increments](docs/financial-engine-design.md)
 - [Implemented journal schema, dedicated SQL tests and migration commands](docs/financial-journal-persistence.md)
 - [Transactional opening, canonical idempotency and derived-balance protocol](docs/financial-opening-writer.md)
+- [Income/Expense, funds validation and real archive/concurrency proof](docs/financial-income-expense.md)
 - [ADR-002: Immutable financial operation journal](docs/decisions/ADR-002-financial-operation-journal.md)
 
 Implementation references: [ASP.NET Core integration testing](https://learn.microsoft.com/en-us/aspnet/core/test/integration-tests?view=aspnetcore-10.0) and [OpenAPI document generation](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/openapi/aspnetcore-openapi?view=aspnetcore-10.0).

@@ -6,7 +6,7 @@ This extends [ADR-002](decisions/ADR-002-financial-operation-journal.md), the [e
 
 ## Scope and resolved boundaries
 
-Only InitializeOpening is executable. Income, Expense, Transfer, Reversal and opening correction have no Application use cases or writable SQL entry points. Money, Account and FinancialOperation are unchanged. No Balance column, pending operation, mutable original or generic repository is introduced.
+This document records the original opening increment. The subsequent [Income/Expense increment](financial-income-expense.md) extends the same protocol. Transfer, Reversal and opening correction still have no executable Application/SQL entry points. Money, Account and FinancialOperation are unchanged. No Balance column, pending operation, mutable original or generic repository is introduced.
 
 Business rejection is a final result, not a partially successful financial operation: it persists only a rejected outcome and its audit. Technical failure before commit rolls back the complete transaction. A response lost after commit cannot undo confirmed history; resolve it through the same idempotency scope, never by guessing rollback or changing the key.
 
@@ -49,9 +49,9 @@ The additive 20261123224234_InitialFinancialWriter migration creates four proced
 | InitializeFinancialOpening | Public runtime entry point for one complete initial-opening command |
 | GetDerivedFinancialBalance | Public runtime entry point for an owner-scoped consistent current read |
 
-Only the last two are granted to the runtime role. Helpers are reused through same-owner static SQL ownership chains, not exposed as arbitrary application lock APIs.
+The initial migration grants the last two to the runtime role; the subsequent Income/Expense migration grants its two public entry points and routes writes through the shared internal ExecuteFinancialWrite. Helpers are reused through same-owner static SQL ownership chains, not exposed as arbitrary application lock APIs.
 
-InitializeFinancialOpening rejects ambient transactions and owns a READ COMMITTED transaction with XACT_ABORT ON. It:
+InitializeFinancialOpening now delegates to the shared ExecuteFinancialWrite through a fixed opening command, preserving the following READ COMMITTED/XACT_ABORT transaction protocol and its original v1 payload/receipt contract. It:
 
 1. Validates wide inputs and trusted owner existence before reserving a key.
 2. Takes a transaction-owned exclusive sp_getapplock for owner/InitializeOpening/key.
@@ -103,7 +103,7 @@ For a first opening there is no earlier initialized financial history; movements
 
 ## Permissions and threat model
 
-VaultFinanceFinancialRuntime has EXECUTE on opening/read only and explicit DENY for direct SELECT/INSERT/UPDATE/DELETE on the five financial tables, plus direct SELECT on the effects view. Static same-dbo ownership chains allow the procedures' necessary access. There is no dynamic runtime DML, generic command dispatcher, runtime schema grant or membership assignment to the development Windows identity.
+The initial role grants opening/read; the subsequent migration adds Income/Expense execution only and explicit DENY for direct SELECT/INSERT/UPDATE/DELETE on the five financial tables, plus direct SELECT on the effects view. Static same-dbo ownership chains allow the procedures' necessary access. There is no dynamic runtime DML, generic command dispatcher, runtime schema grant or membership assignment to the development Windows identity.
 
 A test-only WITHOUT LOGIN principal proves direct history access and helper execution are denied while opening/balance procedures succeed. It is removed only after verifying its generated name/SID; fault triggers are removed only after object ID/definition ownership checks. No financial records are deleted.
 
@@ -119,7 +119,7 @@ A real five-second lock timeout exercises whole-unit retry. A test-owned AFTER I
 
 Administrative integrity probes deliberately bypass the runtime role only in the isolated database. They seed incomplete/wrong-reference, negative and excessive histories, including 800 maximum magnitudes exceeding CLR decimal. These are corruption probes, not implemented Income/Expense commands. All committed synthetic financial history remains retained; no reset/purge is performed.
 
-Physical network loss during commit, a forced native deadlock victim, production multi-node load and future outgoing/transfer writers are not fault-injection tested here. The adapter defines bounded recovery/unknown-result behavior; the current tests do not certify those future scenarios or exactly-once external delivery.
+Physical network loss during commit, a forced native deadlock victim, production multi-node load and future Transfer/Reversal writers are not fault-injection tested here. Income/Expense now have their own funds/archiving tests; see the subsequent increment. The adapter defines bounded recovery/unknown-result behavior; the current tests do not certify those future scenarios or exactly-once external delivery.
 
 ## Commands and artifacts
 
@@ -143,7 +143,7 @@ The fixture applies only reviewed migrations to the marked dedicated database. T
 
 Results are recorded in README after the complete suite. The first cached NuGet audit attempt emitted NU1900; a forced restore without the stale HTTP cache outside the restricted environment completed successfully without disabling audit or changing packages.
 
-Final validation: restore succeeded; build had zero warnings/errors; 150 unit and 219 integration cases passed (369 total, 0 failed, 0 skipped). The 302 previous cases are retained. EF reports no pending model changes, and the generated SQL artifact matches the frozen migration. Read-only inspection confirms VaultFinanceDb still has InitialPersistence only and zero writer procedures; the dedicated database has all three migrations and four procedures. Test-owned fault triggers and temporary database principals were removed successfully.
+Historical opening validation: restore succeeded; build had zero warnings/errors; 150 unit and 219 integration cases passed (369 total, 0 failed, 0 skipped). The 302 previous cases are retained. EF reports no pending model changes, and the generated SQL artifact matches the frozen migration. Read-only inspection confirms VaultFinanceDb still has InitialPersistence only and zero writer procedures; the dedicated database has all three migrations and four procedures. Test-owned fault triggers and temporary database principals were removed successfully.
 
 For a later, separately reviewed development deployment, the explicit target command would be:
 

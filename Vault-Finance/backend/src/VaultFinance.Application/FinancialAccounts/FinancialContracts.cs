@@ -1,3 +1,5 @@
+using VaultFinance.Domain.FinancialOperations;
+
 namespace VaultFinance.Application.FinancialAccounts;
 
 /// <summary>Trusted server context, never a field of a client request.</summary>
@@ -16,6 +18,10 @@ public sealed record InitializeOpeningRequest(Guid AccountId, decimal Amount, st
 
 public sealed record ValidatedOpening(Guid AccountId, decimal Amount, string Currency, string Reason, string IdempotencyKey);
 
+public sealed record FinancialEntryRequest(Guid AccountId, decimal Amount, string? Currency, string? Reason = null);
+
+public sealed record ValidatedFinancialEntry(Guid AccountId, decimal Amount, string Currency, string? Reason, string IdempotencyKey);
+
 public enum FinancialFailure
 {
     InvalidInput,
@@ -26,7 +32,10 @@ public enum FinancialFailure
     IdempotencyConflict,
     JournalInconsistent,
     TemporarilyUnavailable,
-    CommitOutcomeUnknown
+    CommitOutcomeUnknown,
+    Uninitialized,
+    InsufficientFunds,
+    BalanceLimitExceeded
 }
 
 public sealed record OpeningReceipt(
@@ -41,8 +50,20 @@ public sealed record DerivedAccountBalance(Guid AccountId, string Currency, bool
 
 public sealed record BalanceOutcome(DerivedAccountBalance? Balance = null, FinancialFailure? Failure = null);
 
+public sealed record FinancialEntryReceipt(
+    int ReceiptVersion, Guid AccountId, Guid BatchId, Guid OperationId, FinancialOperationKind Kind,
+    decimal Amount, string Currency, DateTimeOffset RecordedAtUtc, DateOnly EffectiveDate);
+
+public sealed record FinancialEntryOutcome(
+    FinancialEntryReceipt? Receipt = null, FinancialFailure? Failure = null,
+    IReadOnlyDictionary<string, string[]>? Errors = null);
+
 public interface IFinancialAccountService
 {
+    Task<FinancialEntryOutcome> RecordIncomeAsync(FinancialOwner owner, FinancialEntryRequest request,
+        string idempotencyKey, CancellationToken cancellationToken = default);
+    Task<FinancialEntryOutcome> RecordExpenseAsync(FinancialOwner owner, FinancialEntryRequest request,
+        string idempotencyKey, CancellationToken cancellationToken = default);
     Task<OpeningOutcome> InitializeOpeningAsync(FinancialOwner owner, InitializeOpeningRequest request,
         string idempotencyKey, CancellationToken cancellationToken = default);
     Task<BalanceOutcome> GetBalanceAsync(FinancialOwner owner, Guid accountId, CancellationToken cancellationToken = default);
@@ -51,6 +72,10 @@ public interface IFinancialAccountService
 /// <summary>The narrow SQL protocol boundary, not a repository or a set of independent inserts.</summary>
 public interface IFinancialJournal
 {
+    Task<FinancialEntryOutcome> RecordIncomeAsync(FinancialOwner owner, ValidatedFinancialEntry entry,
+        CancellationToken cancellationToken);
+    Task<FinancialEntryOutcome> RecordExpenseAsync(FinancialOwner owner, ValidatedFinancialEntry entry,
+        CancellationToken cancellationToken);
     Task<OpeningOutcome> InitializeOpeningAsync(FinancialOwner owner, ValidatedOpening opening,
         CancellationToken cancellationToken);
     Task<BalanceOutcome> GetBalanceAsync(FinancialOwner owner, Guid accountId, CancellationToken cancellationToken);

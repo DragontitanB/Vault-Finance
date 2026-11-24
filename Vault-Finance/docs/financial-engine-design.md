@@ -1,8 +1,8 @@
 # Financial Engine Design
 
-Status: Accepted architecture; Domain, journal persistence, initial opening and derived-balance reads implemented. Updated: 2026-11-23.
+Status: Accepted architecture; Domain, journal persistence, opening, Income/Expense and derived-balance reads implemented. Updated: 2026-11-24.
 
-Vault Finance records simulated personal-finance assertions, not bank funds, custody, settlement, or credit. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the accepted architecture. The [journal persistence increment](financial-journal-persistence.md) adds storage/schema verified in a dedicated SQL database. The [initial opening writer and derived-balance read](financial-opening-writer.md) are now implemented and verified only in the dedicated SQL database. Other financial commands, correction/transfer coordinators and financial HTTP endpoints remain unimplemented.
+Vault Finance records simulated personal-finance assertions, not bank funds, custody, settlement, or credit. [ADR-002](decisions/ADR-002-financial-operation-journal.md) records the accepted architecture. The [journal persistence increment](financial-journal-persistence.md) adds storage/schema verified in a dedicated SQL database. The [initial opening writer and derived-balance read](financial-opening-writer.md) are now implemented and verified only in the dedicated SQL database. [Income and Expense](financial-income-expense.md) now extend the same controlled writer with exact funds/headroom checks and tested archive serialization. Transfer/Reversal, correction coordinators and financial HTTP endpoints remain unimplemented.
 
 ## 1. Review and resolved contradictions
 
@@ -129,7 +129,7 @@ Domain contains positive Opening/Reversal descriptors. Infrastructure now stores
 
 decimal(28,2) has 26 integer digits and a coefficient that fits CLR decimal across the column range. This is an approved financial business bound, not a change to Money. Full-range generic Money must not silently be stored in a narrower column.
 
-Provider round trips for the maximum, trailing zeros and UTC/date facts are now proved against the dedicated SQL Server test database. SQL parameter conversion can round: reject 1.001 before binding, preserve insignificant zeros such as 1.2300, and never route values through float/double. The real SQL test explicitly demonstrates the raw-conversion limit; the opening protocol independently validates exact canonical wide-string amounts before narrowing; future writers must retain this protection.
+Provider round trips for the maximum, trailing zeros and UTC/date facts are now proved against the dedicated SQL Server test database. SQL parameter conversion can round: reject 1.001 before binding, preserve insignificant zeros such as 1.2300, and never route values through float/double. The real SQL test explicitly demonstrates the raw-conversion limit; the shared opening/Income/Expense protocol independently validates exact canonical wide-string amounts before narrowing; future writers must retain this protection.
 
 SUM(decimal) returns decimal(38, scale). Range-check the aggregate before conversion. Do not add unchecked decimal(38,2) aggregates: the result may need scale reduction. Cast validated bounded balances to decimal(28,2) before arithmetic; two operands produce decimal(29,2). Correction intermediates may be signed/wider but must retain scale 2 and satisfy the final bound.
 
@@ -177,7 +177,7 @@ Command types are InitializeOpening, CorrectOpening, Income, Expense, Transfer, 
 
 Scope is exactly (owner, server-selected command type, key). The same key in another type is a different scope. Changed intent within one scope conflicts. Fingerprints include normalized payload/version and expected opening revision, excluding transient recording time, generated IDs, current balances/status and the newly resolved current date.
 
-Future keys are case-sensitive opaque ASCII values, 1-128 characters from letters/digits/hyphen/underscore, never trimmed or truncated. Use a binary SQL collation and a versioned canonical payload encoding with SHA-256 fingerprints. Treat fingerprints as intent identifiers, not authentication; do not store secrets or log raw request bodies. Authorization always precedes receipt lookup/replay, and a receipt must not disclose another owner's operation.
+Keys are case-sensitive opaque ASCII values, 1-128 characters from letters/digits/hyphen/underscore, never trimmed or truncated. Use a binary SQL collation and a versioned canonical payload encoding with SHA-256 fingerprints. Treat fingerprints as intent identifiers, not authentication; do not store secrets or log raw request bodies. Authorization always precedes receipt lookup/replay, and a receipt must not disclose another owner's operation.
 
 Protocol:
 
@@ -218,7 +218,8 @@ Deadlocks/escalation remain possible. Bound waits and retry the whole idempotent
 | Connection loss during commit | Resolve uncertainty by owner/type/key; do not assert rollback |
 | Concurrent opening correction | One current revision wins; stale expectation conflicts |
 | Second full reversal | Conflict; no second inverse |
-| Range or invariant error | Roll back and investigate; never round into success |
+| Existing aggregate/invariant corruption | Roll back and investigate; never round into success |
+| Valid Income/Expense would exceed funds or balance limit | Persist a rejected outcome/audit only; no financial batch/effect |
 
 Use complete committed batches for reads. RCSI gives statement consistency; consistent multi-query reconciliation needs explicitly enabled snapshot isolation or another reviewed protocol. No NOLOCK. A batch identity high-water mark is not a global commit watermark.
 
@@ -230,7 +231,7 @@ Known limits remain no liabilities, FX, partial reversals, user backdating, gene
 
 Current domain tests cover bounded amounts, each kind, identifiers, ownership/currency/Active snapshots, immutable metadata, UTC/Santo Domingo boundaries, causal reversal references and forbidden mutable transitions. Prior tests are retained.
 
-Proved storage guarantees now include exact provider round trips, typed/scoped references, original-reversal uniqueness, owner/type/key uniqueness, append-only SQL behavior and migration/model alignment. Initial opening now proves zero/positive initialization, same-scope concurrent replay/conflict, complete opening-batch rollback, derived-balance guards, native account/key locks and restricted-role execution. Not yet proved: outgoing sufficient-funds enforcement, correction/current replacement revision, transfer atomicity, physical lost-commit response/native deadlock fault injection, or runtime production-principal deployment. Later writer tests require independent connections, actual commit boundaries and fault injection; sequential shared-transaction HTTP fixtures are insufficient.
+Proved storage guarantees now include exact provider round trips, typed/scoped references, original-reversal uniqueness, owner/type/key uniqueness, append-only SQL behavior and migration/model alignment. Initial opening now proves zero/positive initialization, same-scope concurrent replay/conflict, complete opening-batch rollback, derived-balance guards, native account/key locks and restricted-role execution. Income/Expense now prove fresh locked funds/headroom checks, exact zero expenditure, concurrent overspending prevention, stable rejected results, and both archive/operation orders. Not yet proved: correction/current replacement revision, transfer atomicity, physical lost-commit response/native deadlock fault injection, or runtime production-principal deployment. Later writer tests require independent connections, actual commit boundaries and fault injection; sequential shared-transaction HTTP fixtures are insufficient.
 
 | Increment | Exit evidence |
 | --- | --- |
@@ -239,13 +240,13 @@ Proved storage guarantees now include exact provider round trips, typed/scoped r
 | 3: additive schema/projection, implemented | Ownership keys, revision chains, positive amounts, one reversal and batch metadata; dedicated test database only |
 | 4: controlled writer, opening implemented | Atomic opening outcomes/audit, canonical replay, locks and no partial opening batches |
 | 5: opening implemented; correction deferred | Zero/positive initialization and derived balance verified; replacement/expected-revision correction remains future |
-| 6: income/expense/transfer/reversal | Overspending races, conservation and archived exception |
+| 6: Income/Expense implemented; Transfer/Reversal deferred | Overspending, exact funds/headroom, mixed serial outcomes and controlled archive ordering verified; transfer conservation/reversal workflows remain future |
 | 7: HTTP/reconciliation | Cookie/CSRF/BOLA, consistent reads, diagnosis and fault injection |
 
 ADR acceptance closes architecture decisions, not unimplemented writer guarantees. The opening increment adds its Application cases and procedure/role migration, validated only in the marked existing test database. Development database application and financial HTTP endpoints remain excluded. /health remains independent of SQL.
 
 Current validation runs restore/build and the complete SQL-enabled suite against the separate marked database. No tests use the development database for destructive operations or cleanup.
 
-Historical increment-1 validation: 126 unit and 29 ordinary integration tests passed; 32 opt-in SQL methods were skipped. Historical persistence validation passed 302 cases. Current opening validation passes 150 unit and 219 integration cases (369 total), with zero skips and zero build warnings/errors. The [opening contract](financial-opening-writer.md) documents the canonical encoding, lock duration, retry/commit ambiguity, role limits and fault evidence. The dedicated migration is applied; the development migration is not. See the persistence document for count expansion, initial failures and exact limits.
+Historical increment-1 validation: 126 unit and 29 ordinary integration tests passed; 32 opt-in SQL methods were skipped. Historical persistence validation passed 302 cases. Historical opening validation passed 369 cases. Current Income/Expense validation passes 175 unit and 278 integration cases (453 total), with zero skips and zero build warnings/errors. See [Income/Expense evidence](financial-income-expense.md). The [opening contract](financial-opening-writer.md) documents the canonical encoding, lock duration, retry/commit ambiguity, role limits and fault evidence. The dedicated migration is applied; the development migration is not. See the persistence document for count expansion, initial failures and exact limits.
 
 References: [SQL locks](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide?view=sql-server-ver15), [application locks](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sp-getapplock-transact-sql?view=sql-server-ver15), [EF transactions](https://learn.microsoft.com/en-us/ef/core/saving/transactions), [commit ambiguity](https://learn.microsoft.com/en-us/ef/core/miscellaneous/connection-resiliency).

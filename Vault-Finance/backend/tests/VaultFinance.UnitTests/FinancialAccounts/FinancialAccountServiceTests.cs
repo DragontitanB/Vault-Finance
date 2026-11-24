@@ -113,6 +113,10 @@ public sealed class FinancialAccountServiceTests
 
     private sealed class CapturingJournal : IFinancialJournal
     {
+        public Task<FinancialEntryOutcome> RecordIncomeAsync(FinancialOwner owner, ValidatedFinancialEntry entry, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+        public Task<FinancialEntryOutcome> RecordExpenseAsync(FinancialOwner owner, ValidatedFinancialEntry entry, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
         public int Calls { get; private set; }
         public FinancialOwner? Owner { get; private set; }
         public ValidatedOpening? Opening { get; private set; }

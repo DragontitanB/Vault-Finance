@@ -1,8 +1,8 @@
 # Financial Journal Persistence
 
-Status: journal storage implemented. The subsequent [initial-opening writer](financial-opening-writer.md) adds opening/read use cases; financial HTTP endpoints remain unimplemented.
+Status: journal storage implemented. The subsequent [opening](financial-opening-writer.md) and [Income/Expense](financial-income-expense.md) increments add controlled write/read cases; financial HTTP endpoints remain unimplemented.
 
-The accepted policy is [ADR-002](decisions/ADR-002-financial-operation-journal.md). This increment implements relational storage for simulated financial history. The storage increment itself executes no financial commands. The subsequent opening increment adds its controlled writer and derived-balance read, without outgoing financial commands or HTTP endpoints.
+The accepted policy is [ADR-002](decisions/ADR-002-financial-operation-journal.md). This increment implements relational storage for simulated financial history. The storage increment itself executes no financial commands. Subsequent increments implement controlled opening, Income/Expense and derived-balance reads, without Transfer/Reversal/correction commands or financial HTTP endpoints.
 
 ## Review and mapping decision
 

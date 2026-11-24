@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using VaultFinance.Application.FinancialAccounts;
+using VaultFinance.Domain.FinancialOperations;
 
 namespace VaultFinance.Infrastructure.Persistence.FinancialJournal;
 
@@ -15,8 +16,51 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
         ?? throw new InvalidOperationException("Financial persistence requires a configured connection.");
     private const int MaximumAttempts = 3;
 
-    public async Task<OpeningOutcome> InitializeOpeningAsync(
-        FinancialOwner owner, ValidatedOpening opening, CancellationToken cancellationToken)
+    public Task<OpeningOutcome> InitializeOpeningAsync(
+        FinancialOwner owner, ValidatedOpening opening, CancellationToken cancellationToken) =>
+        ExecuteWriteAsync("dbo.InitializeFinancialOpening", owner, opening.AccountId, opening.Amount,
+            opening.Currency, opening.Reason, opening.IdempotencyKey,
+            (code, json) =>
+            {
+                if (code != "opening.initialized") { return new OpeningOutcome(Failure: Failure(code)); }
+                var receipt = JsonSerializer.Deserialize<OpeningReceipt>(json, ReceiptOptions);
+                if (receipt is null || receipt.ReceiptVersion != 1 || receipt.AccountId != opening.AccountId ||
+                    receipt.BatchId == Guid.Empty || receipt.Revision != 1 || receipt.Currency != opening.Currency ||
+                    receipt.OpeningAmount != opening.Amount || receipt.RecordedAtUtc.Offset != TimeSpan.Zero ||
+                    (receipt.OperationId is null) != (opening.Amount == 0m))
+                    return new OpeningOutcome(Failure: FinancialFailure.JournalInconsistent);
+                return new OpeningOutcome(receipt);
+            },
+            failure => new OpeningOutcome(Failure: failure), cancellationToken);
+
+    public Task<FinancialEntryOutcome> RecordIncomeAsync(
+        FinancialOwner owner, ValidatedFinancialEntry entry, CancellationToken cancellationToken) =>
+        RecordEntryAsync(owner, entry, FinancialOperationKind.Income, "dbo.RecordFinancialIncome", cancellationToken);
+
+    public Task<FinancialEntryOutcome> RecordExpenseAsync(
+        FinancialOwner owner, ValidatedFinancialEntry entry, CancellationToken cancellationToken) =>
+        RecordEntryAsync(owner, entry, FinancialOperationKind.Expense, "dbo.RecordFinancialExpense", cancellationToken);
+
+    private Task<FinancialEntryOutcome> RecordEntryAsync(FinancialOwner owner, ValidatedFinancialEntry entry,
+        FinancialOperationKind kind, string procedure, CancellationToken cancellationToken) =>
+        ExecuteWriteAsync(procedure, owner, entry.AccountId, entry.Amount, entry.Currency, entry.Reason, entry.IdempotencyKey,
+            (code, json) =>
+            {
+                string expectedCode = kind == FinancialOperationKind.Income ? "income.posted" : "expense.posted";
+                if (code != expectedCode) { return new FinancialEntryOutcome(Failure: Failure(code)); }
+                var receipt = JsonSerializer.Deserialize<FinancialEntryReceipt>(json, ReceiptOptions);
+                if (receipt is null || receipt.ReceiptVersion != 1 || receipt.AccountId != entry.AccountId ||
+                    receipt.BatchId == Guid.Empty || receipt.OperationId == Guid.Empty || receipt.Kind != kind ||
+                    receipt.Currency != entry.Currency || receipt.Amount != entry.Amount ||
+                    receipt.RecordedAtUtc.Offset != TimeSpan.Zero)
+                    return new FinancialEntryOutcome(Failure: FinancialFailure.JournalInconsistent);
+                return new FinancialEntryOutcome(receipt);
+            },
+            failure => new FinancialEntryOutcome(Failure: failure), cancellationToken);
+
+    private async Task<TResult> ExecuteWriteAsync<TResult>(string procedure, FinancialOwner owner,
+        Guid accountId, decimal amount, string currency, string? reason, string key,
+        Func<string, string, TResult> decode, Func<FinancialFailure, TResult> failed, CancellationToken cancellationToken)
     {
         bool commitMayBeUnknown = false;
         for (int attempt = 1; ; attempt++)
@@ -25,49 +69,35 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
             {
                 await using var connection = new SqlConnection(connectionString);
                 await connection.OpenAsync(cancellationToken);
-                await using var command = Procedure(connection, "dbo.InitializeFinancialOpening", owner, opening.AccountId);
-                // Preserve all meaningful decimal digits, including when a caller bypasses Application validation.
+                await using var command = Procedure(connection, procedure, owner, accountId);
+                // Never round meaningful decimal digits before the SQL protocol validates them.
                 command.Parameters.Add("@AmountText", SqlDbType.NVarChar, -1).Value =
-                    opening.Amount.ToString("0.00##########################", CultureInfo.InvariantCulture);
-                command.Parameters.Add("@Currency", SqlDbType.NVarChar, -1).Value = opening.Currency;
-                command.Parameters.Add("@Reason", SqlDbType.NVarChar, -1).Value = opening.Reason;
-                command.Parameters.Add("@IdempotencyKey", SqlDbType.NVarChar, -1).Value = opening.IdempotencyKey;
+                    amount.ToString("0.00##########################", CultureInfo.InvariantCulture);
+                command.Parameters.Add("@Currency", SqlDbType.NVarChar, -1).Value = currency;
+                command.Parameters.Add("@Reason", SqlDbType.NVarChar, -1).Value = (object?)reason ?? DBNull.Value;
+                command.Parameters.Add("@IdempotencyKey", SqlDbType.NVarChar, -1).Value = key;
                 await using var reader = await command.ExecuteReaderAsync(cancellationToken);
                 if (!await reader.ReadAsync(cancellationToken)) { throw new InvalidOperationException("The financial writer returned no result."); }
-                string code = reader.GetString(0);
-                if (code != "opening.initialized") { return new(Failure: Failure(code)); }
-                var receipt = JsonSerializer.Deserialize<OpeningReceipt>(reader.GetString(1), ReceiptOptions);
-                if (receipt is null || receipt.ReceiptVersion != 1 || receipt.AccountId != opening.AccountId ||
-                    receipt.BatchId == Guid.Empty || receipt.Revision != 1 || receipt.Currency != opening.Currency ||
-                    receipt.OpeningAmount != opening.Amount || receipt.RecordedAtUtc.Offset != TimeSpan.Zero ||
-                    (receipt.OperationId is null) != (opening.Amount == 0m))
-                {
-                    return new(Failure: FinancialFailure.JournalInconsistent);
-                }
-                return new(receipt);
+                return decode(reader.GetString(0), reader.GetString(1));
             }
             catch (SqlException exception) when (exception.Number is 51010)
             {
-                return new(Failure: FinancialFailure.InvalidInput);
+                return failed(FinancialFailure.InvalidInput);
             }
             catch (SqlException exception) when (exception.Number is 51020 or 8115)
             {
-                return new(Failure: FinancialFailure.JournalInconsistent);
+                return failed(FinancialFailure.JournalInconsistent);
             }
             catch (SqlException exception) when (!cancellationToken.IsCancellationRequested && IsRetryable(exception))
             {
                 commitMayBeUnknown |= IsAmbiguous(exception);
                 if (attempt == MaximumAttempts)
-                {
-                    return new(Failure: commitMayBeUnknown
-                        ? FinancialFailure.CommitOutcomeUnknown : FinancialFailure.TemporarilyUnavailable);
-                }
-                // A new connection retries the entire same-key protocol, never an isolated INSERT.
+                    return failed(commitMayBeUnknown ? FinancialFailure.CommitOutcomeUnknown : FinancialFailure.TemporarilyUnavailable);
                 await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt), cancellationToken);
             }
             catch (JsonException)
             {
-                return new(Failure: FinancialFailure.JournalInconsistent);
+                return failed(FinancialFailure.JournalInconsistent);
             }
         }
     }
@@ -115,6 +145,9 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
         "account.archived" => FinancialFailure.Archived,
         "account.currency_mismatch" => FinancialFailure.CurrencyMismatch,
         "opening.already_initialized" => FinancialFailure.AlreadyInitialized,
+        "account.uninitialized" => FinancialFailure.Uninitialized,
+        "funds.insufficient" => FinancialFailure.InsufficientFunds,
+        "balance.limit_exceeded" => FinancialFailure.BalanceLimitExceeded,
         "idempotency.conflict" => FinancialFailure.IdempotencyConflict,
         _ => FinancialFailure.JournalInconsistent
     };

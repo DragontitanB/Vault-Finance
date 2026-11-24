@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-23
-- Scope: Accepted MVP architecture; Domain, journal storage and initial-opening writer implemented; other financial writers deferred
+- Scope: Accepted MVP architecture; Domain, journal storage and opening/Income/Expense writers implemented; Transfer/Reversal/correction deferred
 - Contract: [Financial Engine Design](../financial-engine-design.md)
 
 ## Decision
@@ -57,7 +57,7 @@ The migration is validated only in the marked VaultFinanceJournalTests database.
 
 The [opening protocol](../financial-opening-writer.md) implements zero/positive initialization, owner-scoped derived reads, SQL-canonical SHA-256 fingerprints, scoped request locks, deterministic account locks and complete outcome/audit commit. Stable business rejections store only outcome/audit; pre-commit technical failures roll back all rows. Response loss after commit is resolved by the same key, with an explicit unknown outcome when bounded recovery cannot establish a result.
 
-InitialFinancialWriter adds four procedures and one restricted role, without changing tables or previously applied migrations. It is applied only to the existing marked test database. The runtime role is tested under a non-owner principal; development administrators retain privileges and are outside that guarantee. Income/Expense/Transfer/Reversal and opening correction remain non-executable.
+InitialFinancialWriter adds four procedures and one restricted role, without changing tables or previously applied migrations. It is applied only to the existing marked test database. The runtime role is tested under a non-owner principal; development administrators retain privileges and are outside that guarantee. The [Income/Expense increment](../financial-income-expense.md) now reuses one internal SQL transaction owner for opening and entries, preserving opening v1 hashes/receipts. Two restricted public entry points select fixed Income/Expense commands. Locked exact funds/headroom validation and real archive serialization are verified. Transfer/Reversal and opening correction remain non-executable; no HTTP financial endpoint is enabled.
 
 ## Alternatives and consequences
 

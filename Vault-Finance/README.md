@@ -4,17 +4,17 @@ Vault Finance is a personal finance portfolio project focused on .NET backend ar
 
 ## Current status
 
-The project provides a .NET 10 solution, Clean Architecture, immutable financial domain types, EF Core 10 SQL Server account/journal storage, and ASP.NET Core Identity stores with Guid keys. The API exposes process liveness and development-only OpenAPI. Application supports initial opening, Income, Expense, internal Transfer and owner-scoped derived-balance reads, without financial HTTP endpoints.
+The project provides a .NET 10 solution, Clean Architecture, immutable financial domain types, EF Core 10 SQL Server account/journal storage, and ASP.NET Core Identity stores with Guid keys. The API exposes process liveness and development-only OpenAPI. Application supports initial opening, Income, Expense, internal Transfer, complete Reversal and owner-scoped derived-balance reads, without financial HTTP endpoints.
 
-The API implements registration, cookie login/logout, current-user lookup, CSRF bootstrap, and owner-scoped account creation/listing/detail/rename/archive. Identity owns password validation/hashing, normalization, and temporary lockout. Initial opening, Income, Expense and internal Transfer use the same controlled SQL writer with exact funds/headroom validation, canonical idempotency and audit. Transfer records one canonical operation with two opposite effects, locking both accounts sequentially in native SQL Guid order. Reversal/corrections, financial HTTP endpoints, budgets, dashboard and frontend remain unimplemented. Domain and previous migrations remain unchanged.
+The API implements registration, cookie login/logout, current-user lookup, CSRF bootstrap, and owner-scoped account creation/listing/detail/rename/archive. Identity owns password validation/hashing, normalization, and temporary lockout. Initial opening, Income, Expense, internal Transfer and complete Reversal use the same controlled SQL writer with exact funds/headroom validation, canonical idempotency and audit. Transfer records one canonical operation with two opposite effects, locking both accounts sequentially in native SQL Guid order. Opening corrections, financial HTTP endpoints, budgets, dashboard and frontend remain unimplemented. Reversals derive exact inverse effects from persisted Income/Expense/Transfer originals, including on archived accounts when final bounds permit. Domain and previous migrations remain unchanged.
 
 ADR-002 is Accepted. Financial amounts are positive and bounded by decimal(28,2), using DOP/USD. Confirmed descriptors have no mutation/confirmation-again API; reversal references the original without editing it. UTC recording metadata derives an America/Santo_Domingo effective date. Creating a descriptor does not prove funds, global reversal uniqueness or SQL commit. See the [financial engine contract](docs/financial-engine-design.md) and [domain usage examples](docs/domain-model.md).
 
-Current validation: restore succeeded; build had zero warnings/errors; all 196 unit and 332 integration cases passed, with zero skips (528 total). All 453 prior cases are retained, with 21 new Application unit and 54 new real SQL cases. FinancialTransferWriter was applied only to the marked VaultFinanceJournalTests database; independent read-only before/after checks confirm VaultFinanceDb still has InitialPersistence only and unchanged object metadata/row counts. See [schema, constraints, SQL test safety and controlled migration commands](docs/financial-journal-persistence.md).
+Current validation: restore succeeded; build had zero warnings/errors; all 207 unit and 398 integration cases passed, with zero skips (605 total). All 528 prior cases are retained, with 11 new Application unit and 66 new real SQL cases. FinancialReversalWriter was applied only to the marked VaultFinanceJournalTests database; independent read-only before/after checks confirm VaultFinanceDb still has InitialPersistence only and unchanged object metadata/row counts. See [schema, constraints, SQL test safety and controlled migration commands](docs/financial-journal-persistence.md).
 
 See the [Income/Expense contracts, funds/archiving concurrency evidence and commands](docs/financial-income-expense.md), plus the retained [opening contract](docs/financial-opening-writer.md).
 
-See [internal transfers](docs/financial-transfers.md) for both-account locking, conservation, idempotent receipts, restricted permissions, SQL concurrency evidence and remaining fault-injection limits.
+See [internal transfers](docs/financial-transfers.md) for both-account locking and conservation, and [complete reversals](docs/financial-reversals.md) for reference-derived effects, archived-account compensation, idempotency and concurrency evidence.
 
 ## Prerequisites
 
@@ -113,7 +113,7 @@ Authentication HTTP tests use WebApplicationFactory with the real SQL provider a
 
 The account suite uses two independent authenticated cookie jars per test against real SQL Server, with the same rollback isolation. It covers foreign-ID reads/writes, owner-only lists, strict DTOs, domain validation, archive idempotence, CSRF, paging, sorting, and a stale-snapshot rename after archive. The previous ownership/currency persistence assertion now includes the earlier EF alternate-key rejection.
 
-Historical account-management validation was 72 unit + 109 integration = 181 passes. Journal persistence passed 302 cases, opening passed 369 and Income/Expense passed 453. Current validation passes 528, adding two-account transfers, conservation, independent-session races, both archive orders, permissions and full rollback. Physical network-loss/native-deadlock fault injection, Reversal and opening correction remain outside this increment. Concurrent independent pairs can still wait on shared journal-index resources; no parallel-throughput or deadlock-free guarantee is claimed.
+Historical account-management validation was 72 unit + 109 integration = 181 passes. Journal persistence passed 302 cases, opening passed 369 and Income/Expense passed 453. Transfer validation passed 528. Current validation passes 605, adding exact reversals, concurrent uniqueness, archive ordering, mixed writers, stable rejections, permissions and full rollback. Physical network-loss/native-deadlock fault injection and opening correction remain outside this increment. Concurrent independent pairs can still wait on shared journal-index resources; no parallel-throughput or deadlock-free guarantee is claimed.
 
 ## Authentication and CSRF
 
@@ -255,6 +255,8 @@ docs/
   financial-journal-persistence.md
   financial-opening-writer.md
   financial-income-expense.md
+  financial-transfers.md
+  financial-reversals.md
   decisions/ADR-001-modular-monolith.md
   decisions/ADR-002-financial-operation-journal.md
 ```
@@ -262,10 +264,10 @@ docs/
 | Project | Responsibility | Direct project references |
 | --- | --- | --- |
 | Domain | Money, Account, immutable financial descriptors and local invariants | None |
-| Application | Authentication/account contracts, opening, Income/Expense/Transfer and derived-balance use cases | Domain |
+| Application | Authentication/account contracts, opening, Income/Expense/Transfer/Reversal and derived-balance use cases | Domain |
 | Infrastructure | SQL Server storage, shared transactional financial protocol and Identity | Application, Domain |
 | Api | HTTP endpoints and composition root | Application, Infrastructure |
-| UnitTests | Domain invariants and isolated opening/entry/transfer Application behavior | Domain, Application |
+| UnitTests | Domain invariants and isolated opening/entry/transfer/reversal Application behavior | Domain, Application |
 | IntegrationTests | HTTP/configuration checks and opt-in real SQL tests | Api, Infrastructure |
 
 UnitTests references Domain and Application, without Api/Infrastructure. The health HTTP contract remains covered by IntegrationTests.
@@ -292,6 +294,7 @@ Data Protection uses application name VaultFinance and the Windows profile's nor
 - [Transactional opening, canonical idempotency and derived-balance protocol](docs/financial-opening-writer.md)
 - [Income/Expense, funds validation and real archive/concurrency proof](docs/financial-income-expense.md)
 - [Internal transfers, deterministic account locks and conservation](docs/financial-transfers.md)
+- [Complete reversals, immutable originals and concurrent uniqueness](docs/financial-reversals.md)
 - [ADR-002: Immutable financial operation journal](docs/decisions/ADR-002-financial-operation-journal.md)
 
 Implementation references: [ASP.NET Core integration testing](https://learn.microsoft.com/en-us/aspnet/core/test/integration-tests?view=aspnetcore-10.0) and [OpenAPI document generation](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/openapi/aspnetcore-openapi?view=aspnetcore-10.0).

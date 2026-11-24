@@ -6,6 +6,23 @@ namespace VaultFinance.Application.FinancialAccounts;
 
 public sealed class FinancialAccountService(IFinancialJournal journal) : IFinancialAccountService
 {
+    public Task<FinancialReversalOutcome> RecordReversalAsync(FinancialOwner owner, FinancialReversalRequest request,
+        string idempotencyKey, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(request);
+        var errors = new Dictionary<string, string[]>();
+        ValidateKey(idempotencyKey, errors);
+        if (request.OriginalOperationId == Guid.Empty)
+            errors["originalOperationId"] = ["An original operation identifier is required."];
+        string? reason = request.Reason?.Trim();
+        if (string.IsNullOrEmpty(reason) || reason.Length > FinancialOperation.MaximumReasonLength)
+            errors["reason"] = ["A reason of 1-200 characters is required."];
+        return errors.Count != 0
+            ? Task.FromResult(new FinancialReversalOutcome(Failure: FinancialFailure.InvalidInput, Errors: errors))
+            : journal.RecordReversalAsync(owner, new(request.OriginalOperationId, reason!, idempotencyKey), cancellationToken);
+    }
+
     public Task<FinancialTransferOutcome> RecordTransferAsync(FinancialOwner owner, FinancialTransferRequest request,
         string idempotencyKey, CancellationToken cancellationToken = default)
     {

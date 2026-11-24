@@ -2,7 +2,7 @@
 
 ## Status and conventions
 
-Money, Account and the immutable financial Domain types retain their existing behavior. Infrastructure maps Account, Identity users and dedicated financial journal records; Domain entities gain no ORM dependencies, setters or persistence constructors. Application/API support owned account creation, listing, detail, rename, and archive. Initial opening, Income/Expense/Transfer, derived-balance reads and their idempotency/audit execute through the controlled SQL boundary. Category, Budget, Reversal/correction workflows and financial HTTP endpoints remain future work. See the [journal storage model](financial-journal-persistence.md).
+Money, Account and the immutable financial Domain types retain their existing behavior. Infrastructure maps Account, Identity users and dedicated financial journal records; Domain entities gain no ORM dependencies, setters or persistence constructors. Application/API support owned account creation, listing, detail, rename, and archive. Initial opening, Income/Expense/Transfer/Reversal, derived-balance reads and their idempotency/audit execute through the controlled SQL boundary. Category, Budget, opening-correction workflows and financial HTTP endpoints remain future work. See the [journal storage model](financial-journal-persistence.md).
 
 Account uses opaque, caller-supplied, non-empty Guid identifiers for Id and UserId. The entity does not generate identifiers or verify that a User exists. Financial timestamps are UTC with America/Santo_Domingo accounting dates. The future trusted writer selects current timestamps; users cannot backdate operations in the MVP.
 
@@ -99,7 +99,7 @@ Currency validation is shared through an internal CurrencyCode helper, so Accoun
 
 Zero initialization is future audited opening-version metadata, not a zero monetary operation. Opening correction will append a full reversal and positive replacement (when needed) in one atomic batch and advance the opening revision.
 
-Infrastructure stores opening versions, operations, batches, outcomes and audit, with typed FKs, scoped uniqueness and append-only guards. There is no additional Domain opening-version entity or mutable balance. Application/Infrastructure implement initial opening, canonical replay and locked derived reads with complete-batch validation. Income/Expense/Transfer use exact locked funds/headroom checks with initialized/Active owned accounts. Reversal/correction coordination and financial HTTP endpoints remain future work. See the [opening contract](financial-opening-writer.md) and [transfer protocol](financial-transfers.md).
+Infrastructure stores opening versions, operations, batches, outcomes and audit, with typed FKs, scoped uniqueness and append-only guards. There is no additional Domain opening-version entity or mutable balance. Application/Infrastructure implement initial opening, canonical replay and locked derived reads with complete-batch validation. Income/Expense/Transfer use exact locked funds/headroom checks with initialized/Active owned accounts. [Complete Reversal](financial-reversals.md) references the persisted original without copying editable monetary fields and permits bounded archived-account compensation. Opening correction and financial HTTP endpoints remain future work. See the [opening contract](financial-opening-writer.md) and [transfer protocol](financial-transfers.md).
 
 ```csharp
 using VaultFinance.Domain.FinancialOperations;
@@ -141,4 +141,4 @@ Adding `new Money(1m, "DOP")` to `original` throws DomainException. Creating `ne
 
 ## Persistence and concurrency decisions still required
 
-Account and financial journal mappings, constraints and bounded decimal/date round trips are tested on a dedicated SQL database. InitialPersistence and Domain are unchanged. Opening, Income/Expense/Transfer, account/key locks, balances and scoped replay are verified under ADR-002, including transfer conservation and both archive orders. Reversal/correction execution remains future work; see financial-transfers.md. Domain has no framework/project dependencies. Descriptor checks do not replace authorized owner context or locked SQL revalidation.
+Account and financial journal mappings, constraints and bounded decimal/date round trips are tested on a dedicated SQL database. InitialPersistence and Domain are unchanged. Opening, Income/Expense/Transfer/Reversal, account/key locks, balances and scoped replay are verified under ADR-002, including transfer conservation and both archive orders. Opening correction remains future work; see financial-reversals.md. Domain has no framework/project dependencies. Descriptor checks do not replace authorized owner context or locked SQL revalidation.

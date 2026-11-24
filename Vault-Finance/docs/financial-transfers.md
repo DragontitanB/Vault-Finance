@@ -2,6 +2,8 @@
 
 Status: implemented and verified on SQL Server 2019 Express in the existing marked VaultFinanceJournalTests database. Updated: 2026-11-24.
 
+This document records the Transfer increment and its historical results. The subsequent [complete Reversal increment](financial-reversals.md) extends the same protocol without changing transfer fingerprints, receipts, account locking or the effects view. References below to future Reversal describe this earlier increment's scope.
+
 This increment extends [ADR-002](decisions/ADR-002-financial-operation-journal.md), the [financial engine contract](financial-engine-design.md), [journal persistence](financial-journal-persistence.md), [opening](financial-opening-writer.md) and [Income/Expense](financial-income-expense.md). Amounts describe simulated personal finances, not bank funds. Domain, Accounts, Identity, journal tables, the effects view and previous migrations are unchanged. No financial HTTP route is introduced.
 
 ## Application contract

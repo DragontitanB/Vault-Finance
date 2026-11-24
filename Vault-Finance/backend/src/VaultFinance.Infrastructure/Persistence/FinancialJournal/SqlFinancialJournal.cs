@@ -16,6 +16,32 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
         ?? throw new InvalidOperationException("Financial persistence requires a configured connection.");
     private const int MaximumAttempts = 3;
 
+    public Task<FinancialReversalOutcome> RecordReversalAsync(FinancialOwner owner,
+        ValidatedFinancialReversal reversal, CancellationToken cancellationToken) =>
+        ExecuteProtocolAsync(connection =>
+        {
+            var command = Procedure(connection, "dbo.RecordFinancialReversal", owner, reversal.OriginalOperationId, "@OriginalOperationId");
+            command.Parameters.Add("@Reason", SqlDbType.NVarChar, -1).Value = (object?)reversal.Reason ?? DBNull.Value;
+            command.Parameters.Add("@IdempotencyKey", SqlDbType.NVarChar, -1).Value = reversal.IdempotencyKey;
+            return command;
+        }, (code, json) =>
+        {
+            if (code != "reversal.posted") return new FinancialReversalOutcome(Failure: Failure(code));
+            var receipt = JsonSerializer.Deserialize<FinancialReversalReceipt>(json, ReceiptOptions);
+            if (receipt is null || receipt.ReceiptVersion != 1 || receipt.OriginalOperationId != reversal.OriginalOperationId ||
+                receipt.BatchId == Guid.Empty || receipt.OperationId == Guid.Empty || receipt.OperationId == receipt.OriginalOperationId ||
+                receipt.Kind != FinancialOperationKind.Reversal ||
+                receipt.OriginalOperationKind is not (FinancialOperationKind.Income or FinancialOperationKind.Expense or FinancialOperationKind.Transfer) ||
+                receipt.Amount <= 0m || receipt.Amount > FinancialAmount.MaximumValue || receipt.Currency is not ("DOP" or "USD") ||
+                receipt.RecordedAtUtc.Offset != TimeSpan.Zero ||
+                (receipt.OriginalOperationKind != FinancialOperationKind.Expense) != receipt.DebitAccountId.HasValue ||
+                (receipt.OriginalOperationKind != FinancialOperationKind.Income) != receipt.CreditAccountId.HasValue ||
+                receipt.DebitAccountId == Guid.Empty || receipt.CreditAccountId == Guid.Empty ||
+                (receipt.DebitAccountId.HasValue && receipt.DebitAccountId == receipt.CreditAccountId))
+                return new FinancialReversalOutcome(Failure: FinancialFailure.JournalInconsistent);
+            return new FinancialReversalOutcome(receipt);
+        }, failure => new FinancialReversalOutcome(Failure: failure), cancellationToken);
+
     public Task<FinancialTransferOutcome> RecordTransferAsync(FinancialOwner owner,
         ValidatedFinancialTransfer transfer, CancellationToken cancellationToken) =>
         ExecuteWriteAsync("dbo.RecordFinancialTransfer", owner, transfer.SourceAccountId, transfer.Amount,
@@ -75,10 +101,27 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
             },
             failure => new FinancialEntryOutcome(Failure: failure), cancellationToken);
 
-    private async Task<TResult> ExecuteWriteAsync<TResult>(string procedure, FinancialOwner owner,
+    private Task<TResult> ExecuteWriteAsync<TResult>(string procedure, FinancialOwner owner,
         Guid accountId, decimal amount, string currency, string? reason, string key,
         Func<string, string, TResult> decode, Func<FinancialFailure, TResult> failed, CancellationToken cancellationToken,
-        Guid? destinationAccountId = null)
+        Guid? destinationAccountId = null) =>
+        ExecuteProtocolAsync(connection =>
+        {
+            var command = Procedure(connection, procedure, owner, accountId,
+                destinationAccountId.HasValue ? "@SourceAccountId" : "@AccountId");
+            if (destinationAccountId.HasValue)
+                command.Parameters.Add("@DestinationAccountId", SqlDbType.UniqueIdentifier).Value = destinationAccountId.Value;
+            // Never round meaningful decimal digits before the SQL protocol validates them.
+            command.Parameters.Add("@AmountText", SqlDbType.NVarChar, -1).Value =
+                amount.ToString("0.00##########################", CultureInfo.InvariantCulture);
+            command.Parameters.Add("@Currency", SqlDbType.NVarChar, -1).Value = currency;
+            command.Parameters.Add("@Reason", SqlDbType.NVarChar, -1).Value = (object?)reason ?? DBNull.Value;
+            command.Parameters.Add("@IdempotencyKey", SqlDbType.NVarChar, -1).Value = key;
+            return command;
+        }, decode, failed, cancellationToken);
+
+    private async Task<TResult> ExecuteProtocolAsync<TResult>(Func<SqlConnection, SqlCommand> createCommand,
+        Func<string, string, TResult> decode, Func<FinancialFailure, TResult> failed, CancellationToken cancellationToken)
     {
         bool commitMayBeUnknown = false;
         for (int attempt = 1; ; attempt++)
@@ -87,16 +130,7 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
             {
                 await using var connection = new SqlConnection(connectionString);
                 await connection.OpenAsync(cancellationToken);
-                await using var command = Procedure(connection, procedure, owner, accountId,
-                    destinationAccountId.HasValue ? "@SourceAccountId" : "@AccountId");
-                if (destinationAccountId.HasValue)
-                    command.Parameters.Add("@DestinationAccountId", SqlDbType.UniqueIdentifier).Value = destinationAccountId.Value;
-                // Never round meaningful decimal digits before the SQL protocol validates them.
-                command.Parameters.Add("@AmountText", SqlDbType.NVarChar, -1).Value =
-                    amount.ToString("0.00##########################", CultureInfo.InvariantCulture);
-                command.Parameters.Add("@Currency", SqlDbType.NVarChar, -1).Value = currency;
-                command.Parameters.Add("@Reason", SqlDbType.NVarChar, -1).Value = (object?)reason ?? DBNull.Value;
-                command.Parameters.Add("@IdempotencyKey", SqlDbType.NVarChar, -1).Value = key;
+                await using var command = createCommand(connection);
                 await using var reader = await command.ExecuteReaderAsync(cancellationToken);
                 if (!await reader.ReadAsync(cancellationToken)) { throw new InvalidOperationException("The financial writer returned no result."); }
                 return decode(reader.GetString(0), reader.GetString(1));
@@ -164,6 +198,9 @@ public sealed class SqlFinancialJournal(VaultFinanceDbContext context) : IFinanc
     private static FinancialFailure Failure(string code) => code switch
     {
         "account.not_found" => FinancialFailure.NotFound,
+        "operation.not_found" => FinancialFailure.NotFound,
+        "operation.not_reversible" => FinancialFailure.OperationNotReversible,
+        "reversal.already_reversed" => FinancialFailure.AlreadyReversed,
         "account.archived" => FinancialFailure.Archived,
         "account.currency_mismatch" => FinancialFailure.CurrencyMismatch,
         "opening.already_initialized" => FinancialFailure.AlreadyInitialized,

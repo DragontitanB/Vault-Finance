@@ -51,7 +51,7 @@ public sealed class FinancialJournalSqlServerTests(SqlServerFixture fixture)
         Assert.Empty(await context.Database.GetPendingMigrationsAsync());
         Assert.Equal(new[] { "20261123172009_InitialPersistence", "20261123215517_FinancialJournalPersistence",
             "20261123224234_InitialFinancialWriter", "20261124145702_FinancialIncomeExpenseWriter",
-            "20261124152847_FinancialTransferWriter" },
+            "20261124152847_FinancialTransferWriter", "20261124160033_FinancialReversalWriter" },
             (await context.Database.GetAppliedMigrationsAsync()).ToArray());
         await using var connection = new SqlConnection(context.Database.GetConnectionString());
         await connection.OpenAsync();
